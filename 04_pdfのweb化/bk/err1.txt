@@ -1,0 +1,8 @@
+react-dom.production.min.js:54 Uncaught Error: Minified React error #231; visit https://reactjs.org/docs/error-decoder.html?invariant=231&args[]=onClick&args[]=string for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at Kb (react-dom.production.min.js:54:16)
+    at react-dom.production.min.js:112:66
+    at Qk (react-dom.production.min.js:273:42)
+    at Jb (react-dom.production.min.js:52:375)
+    at hd (react-dom.production.min.js:109:469)
+    at fd (react-dom.production.min.js:74:59)
+    at ed (react-dom.production.min.js:73:73)

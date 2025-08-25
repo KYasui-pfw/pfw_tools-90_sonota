@@ -1,0 +1,19 @@
+FROM python:3.12.3-slim
+
+WORKDIR /app
+
+# pipを最新にアップグレード
+RUN pip install --no-cache-dir --upgrade pip
+
+# 必要なパッケージをインストール
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションファイルをコピー
+COPY . .
+
+# ポート8504を公開
+EXPOSE 8504
+
+# Streamlitアプリを起動
+CMD ["streamlit", "run", "viewer.py", "--server.port=8504", "--server.address=0.0.0.0"]

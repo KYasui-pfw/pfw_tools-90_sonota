@@ -1,0 +1,5 @@
+pyodbc
+SQLAlchemy
+streamlit==1.41.0
+pandas
+streamlit-aggrid==1.0.5

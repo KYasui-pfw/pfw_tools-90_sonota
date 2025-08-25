@@ -1,0 +1,17 @@
+services:
+  streamlit:
+    build: .
+    ports:
+      - "8502:8502"
+    volumes:
+      - ./assembly_streamlit_app:/assembly_streamlit_app # アプリケーションコード
+      - ./assembly_streamlit_app/Database:/assembly_streamlit_app/Database # ★これを追加
+    container_name: assembly-streamlit-app
+    restart: unless-stopped
+    networks:
+      - default
+
+networks:
+  default:
+    name: app-shared-net
+    external: true

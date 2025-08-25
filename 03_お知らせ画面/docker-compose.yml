@@ -1,0 +1,35 @@
+services:
+  # 管理用アプリ
+  notice-admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    ports:
+      - "8503:8503"
+    volumes:
+      - .:/app  # アプリケーションコード
+      - ./notices.db:/app/notices.db  # データベースファイル
+    container_name: notice-admin-app
+    restart: unless-stopped
+    networks:
+      - default
+
+  # 閲覧用アプリ
+  notice-viewer:
+    build:
+      context: .
+      dockerfile: Dockerfile.viewer
+    ports:
+      - "8504:8504"
+    volumes:
+      - .:/app  # アプリケーションコード
+      - ./notices.db:/app/notices.db  # データベースファイル
+    container_name: notice-viewer-app
+    restart: unless-stopped
+    networks:
+      - default
+
+networks:
+  default:
+    name: app-shared-net
+    external: true
