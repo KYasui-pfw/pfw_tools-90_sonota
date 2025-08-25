@@ -1,0 +1,296 @@
+{
+  "$": {
+    "mtime": 1743550405.7829099,
+    "file_count": 16,
+    "total_size": 1331774,
+    "files_hash": "d256ba53caeb3b5f"
+  },
+  "0": {
+    "mtime": 1743399832.1782298,
+    "file_count": 2598,
+    "total_size": 263575280,
+    "files_hash": "d75ea1b0544efd72"
+  },
+  "1": {
+    "mtime": 1651479660.2961204,
+    "file_count": 28308,
+    "total_size": 3126560900,
+    "files_hash": "c51b4cab021e3a8e"
+  },
+  "2": {
+    "mtime": 1716366064.8469293,
+    "file_count": 10334,
+    "total_size": 1373572698,
+    "files_hash": "cf973763e4435ef7"
+  },
+  "3": {
+    "mtime": 1750926065.3860126,
+    "file_count": 24886,
+    "total_size": 2373562332,
+    "files_hash": "c0102504b3edcb6e"
+  },
+  "4": {
+    "mtime": 1711700464.9861035,
+    "file_count": 11516,
+    "total_size": 1026766940,
+    "files_hash": "7d4bf714f29ba69b"
+  },
+  "5": {
+    "mtime": 1732004465.3813145,
+    "file_count": 24812,
+    "total_size": 2214196416,
+    "files_hash": "a4286a8b05493535"
+  },
+  "6": {
+    "mtime": 1722586864.513448,
+    "file_count": 13102,
+    "total_size": 1553936720,
+    "files_hash": "6a78e3f55b3c0947"
+  },
+  "7": {
+    "mtime": 1754460200.5545382,
+    "file_count": 7918,
+    "total_size": 1194097330,
+    "files_hash": "534c9d94afb3f0ca"
+  },
+  "8": {
+    "mtime": 1743475112.1246955,
+    "file_count": 7892,
+    "total_size": 1294488228,
+    "files_hash": "50403da0a2c51210"
+  },
+  "9": {
+    "mtime": 1743475112.1246955,
+    "file_count": 10280,
+    "total_size": 1608582148,
+    "files_hash": "7079ebd751b99b9b"
+  },
+  "A": {
+    "mtime": 1743466938.6778934,
+    "file_count": 326,
+    "total_size": 50094692,
+    "files_hash": "194c8902edb29ec0"
+  },
+  "B": {
+    "mtime": 1743467069.9495392,
+    "file_count": 1352,
+    "total_size": 101304058,
+    "files_hash": "2b87cd1d704401bd"
+  },
+  "C": {
+    "mtime": 1743467268.2752688,
+    "file_count": 1466,
+    "total_size": 103335526,
+    "files_hash": "70b89c20240454cf"
+  },
+  "D": {
+    "mtime": 1743468338.3431308,
+    "file_count": 5154,
+    "total_size": 444682140,
+    "files_hash": "34cc10e68e4fe054"
+  },
+  "E": {
+    "mtime": 1743469681.7463517,
+    "file_count": 11710,
+    "total_size": 992356032,
+    "files_hash": "b9bd976c33ab498a"
+  },
+  "F": {
+    "mtime": 1754036465.7846782,
+    "file_count": 278,
+    "total_size": 60581024,
+    "files_hash": "574939146a817a27"
+  },
+  "G": {
+    "mtime": 1743470030.561807,
+    "file_count": 5772,
+    "total_size": 649345404,
+    "files_hash": "da8c70b09d211ebf"
+  },
+  "H": {
+    "mtime": 1754036467.4263437,
+    "file_count": 1000,
+    "total_size": 43139454,
+    "files_hash": "eee2105cfc6f6e04"
+  },
+  "I": {
+    "mtime": 1749709640.500985,
+    "file_count": 628,
+    "total_size": 242425096,
+    "files_hash": "7b323261d291a587"
+  },
+  "J": {
+    "mtime": 1743551755.7940168,
+    "file_count": 8,
+    "total_size": 675256,
+    "files_hash": "f9f973f4a97ea392"
+  },
+  "K": {
+    "mtime": 1743476205.6740348,
+    "file_count": 30492,
+    "total_size": 2556612648,
+    "files_hash": "73bf31379dcee828"
+  },
+  "krd_zumen": {
+    "mtime": 1651133801.2080238,
+    "file_count": 462,
+    "total_size": 14698224,
+    "files_hash": "7ff48acf1a0643f3"
+  },
+  "L": {
+    "mtime": 1754727669.8397353,
+    "file_count": 916,
+    "total_size": 87721688,
+    "files_hash": "82562fb7ee3b1982"
+  },
+  "M": {
+    "mtime": 1755851720.1330314,
+    "file_count": 1674,
+    "total_size": 120614046,
+    "files_hash": "69c3c9edf0f73d84"
+  },
+  "N": {
+    "mtime": 1753927644.218015,
+    "file_count": 80,
+    "total_size": 4202214,
+    "files_hash": "11cf7c6d9653b8fe"
+  },
+  "NDL": {
+    "mtime": 1743469786.0177872,
+    "file_count": 2896,
+    "total_size": 556509186,
+    "files_hash": "2d83990c2751da89"
+  },
+  "O": {
+    "mtime": 1743551970.9626775,
+    "file_count": 536,
+    "total_size": 25601104,
+    "files_hash": "069d7704d79def7e"
+  },
+  "OTHER": {
+    "mtime": 1743551971.0892925,
+    "file_count": 18,
+    "total_size": 2110074,
+    "files_hash": "436de4c118a371f4"
+  },
+  "P": {
+    "mtime": 1748593268.2362506,
+    "file_count": 94,
+    "total_size": 4913588,
+    "files_hash": "a0b1ef6636b066e6"
+  },
+  "PIP": {
+    "mtime": 1755851719.131782,
+    "file_count": 1108,
+    "total_size": 122138302,
+    "files_hash": "c9c29b297870075f"
+  },
+  "Q": {
+    "mtime": 1743551977.2720754,
+    "file_count": 10,
+    "total_size": 1314962,
+    "files_hash": "e14f95202b0b85e5"
+  },
+  "R": {
+    "mtime": 1744080260.347466,
+    "file_count": 84,
+    "total_size": 5774446,
+    "files_hash": "7bf8429a0d007ae0"
+  },
+  "S": {
+    "mtime": 1753927643.968013,
+    "file_count": 1968,
+    "total_size": 134404580,
+    "files_hash": "974a1533cf4bc9a1"
+  },
+  "SPL": {
+    "mtime": 1651133897.0279572,
+    "file_count": 12566,
+    "total_size": 1445235832,
+    "files_hash": "010fd23303f7f619"
+  },
+  "T": {
+    "mtime": 1755851728.1743383,
+    "file_count": 358,
+    "total_size": 32395358,
+    "files_hash": "aee5e15a61cf15b0"
+  },
+  "TS": {
+    "mtime": 1738723492.767617,
+    "file_count": 28410,
+    "total_size": 1610674984,
+    "files_hash": "433c503e89d8e116"
+  },
+  "U": {
+    "mtime": 1750926066.519938,
+    "file_count": 344,
+    "total_size": 19221054,
+    "files_hash": "79747bbca4ec14e3"
+  },
+  "V": {
+    "mtime": 1743552001.1362038,
+    "file_count": 618,
+    "total_size": 29794198,
+    "files_hash": "6a82275a5998bdd4"
+  },
+  "W": {
+    "mtime": 1743552002.998876,
+    "file_count": 310,
+    "total_size": 12619510,
+    "files_hash": "deef7165fe71c383"
+  },
+  "X": {
+    "mtime": 1743552004.1695547,
+    "file_count": 176,
+    "total_size": 9069348,
+    "files_hash": "1dcce597a8017e29"
+  },
+  "Y": {
+    "mtime": 1743471296.6697316,
+    "file_count": 5306,
+    "total_size": 478196966,
+    "files_hash": "fb12c5f6df74d769"
+  },
+  "Z": {
+    "mtime": 1743552045.7742836,
+    "file_count": 130,
+    "total_size": 6518146,
+    "files_hash": "dde4026ac8867d64"
+  },
+  "カムプレート素材図": {
+    "mtime": 1725929242.6216314,
+    "file_count": 74,
+    "total_size": 5451782,
+    "files_hash": "3f2aa48843c329a9"
+  },
+  "旧生産機外部配線回路図": {
+    "mtime": 1688540520.9438403,
+    "file_count": 30,
+    "total_size": 7246212,
+    "files_hash": "dab2ffe9621e09d1"
+  },
+  "生技図面": {
+    "mtime": 1754547231.347587,
+    "file_count": 10830,
+    "total_size": 1151802750,
+    "files_hash": "c5003d47fedf1d6f"
+  },
+  "素材図": {
+    "mtime": 1651132911.9413154,
+    "file_count": 34,
+    "total_size": 1123482,
+    "files_hash": "6907c06dbf783844"
+  },
+  "荒加工図": {
+    "mtime": 1651134078.219745,
+    "file_count": 1624,
+    "total_size": 119786648,
+    "files_hash": "4fffd563d0f4d5d5"
+  },
+  "ﾌﾗｲｽ図": {
+    "mtime": 1651134066.1791685,
+    "file_count": 444,
+    "total_size": 22798504,
+    "files_hash": "49a3c2e1b22443d7"
+  }
+}

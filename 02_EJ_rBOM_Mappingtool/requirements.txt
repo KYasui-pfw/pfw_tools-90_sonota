@@ -1,0 +1,6 @@
+streamlit>=1.40.0
+pandas>=2.2.0
+cx-Oracle>=8.3.0
+requests>=2.32.0
+python-dotenv>=1.0.1
+openpyxl>=3.1.5

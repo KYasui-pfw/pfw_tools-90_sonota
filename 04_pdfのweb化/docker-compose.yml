@@ -1,0 +1,37 @@
+services:
+  # 作業基準アプリ
+  fukuhara-kijun:
+    build:
+      context: .
+      dockerfile: Dockerfile.kijun
+    ports:
+      - "8505:8505"
+    volumes:
+      - .:/app  # アプリケーションコード
+      - /mnt/fsrv24/kijun:/app/network/kijyun:ro  # 作業基準PDF読み取り用
+    container_name: fukuhara-kijun-app
+    restart: unless-stopped
+    networks:
+      - app-shared-net
+
+  # 図面検索アプリ
+  fukuhara-zumen:
+    build:
+      context: .
+      dockerfile: Dockerfile.zumen
+    ports:
+      - "8506:8506"
+    volumes:
+      - .:/app  # アプリケーションコード
+      - /mnt/fsrv24/file_monitor/zumen:/app/file_monitor/zumen:ro  # JSON読み取り用
+      - /mnt/fsrv24/file_monitor/zumenhai:/app/file_monitor/zumenhai:ro  # JSON読み取り用
+      - /mnt/fsrv24/zumen:/app/network/zumen:ro  # PDF/TIFファイル読み取り用
+      - /mnt/fsrv24/zumenhai:/app/network/zumenhai:ro  # PDF/TIFファイル読み取り用
+    container_name: fukuhara-zumen-app
+    restart: unless-stopped
+    networks:
+      - app-shared-net
+
+networks:
+  app-shared-net:
+    external: true

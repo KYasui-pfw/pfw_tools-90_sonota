@@ -1,0 +1,19 @@
+FROM python:3.12.3-slim
+
+WORKDIR /app
+
+# pipを最新にアップグレード
+RUN pip install --no-cache-dir --upgrade pip
+
+# 必要なパッケージをインストール
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションファイルをコピー
+COPY . .
+
+# ポート8505を公開
+EXPOSE 8505
+
+# Streamlitアプリを起動
+CMD ["streamlit", "run", "福原精機作業基準.py", "--server.port=8505", "--server.address=0.0.0.0"]
