@@ -13,31 +13,45 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 古いログファイル削除関数
-def cleanup_old_logs(log_dir):
-    """7日を過ぎたログファイルを削除"""
+def cleanup_old_logs(log_dir, days_to_keep=7):
+    """指定した日数を過ぎたログファイルを自動削除"""
     try:
         log_pattern = os.path.join(log_dir, "log_*.txt")
         log_files = glob.glob(log_pattern)
-        cutoff_date = datetime.now() - timedelta(days=7)
+        cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+        deleted_count = 0
         
         for log_file in log_files:
             file_time = datetime.fromtimestamp(os.path.getctime(log_file))
             if file_time < cutoff_date:
                 os.remove(log_file)
-                print(f"古いログファイル {log_file} を削除しました")
+                print(f"古いログファイル {os.path.basename(log_file)} を削除しました (作成日: {file_time.strftime('%Y-%m-%d')})")
+                deleted_count += 1
+        
+        if deleted_count == 0:
+            print(f"削除対象のログファイルはありません (保持期間: {days_to_keep}日)")
+        else:
+            print(f"{deleted_count}個のログファイルを削除しました")
+            
     except Exception as e:
         print(f"ログファイル削除エラー: {e}")
 
 # ログ設定
 LOG_DIR = os.getenv('LOG_DIR', 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
+
+# ログローテーション設定（日次で新しいファイル作成）
 log_filename = os.path.join(LOG_DIR, f"log_{datetime.now().strftime('%Y%m%d')}.txt")
+file_handler = logging.FileHandler(log_filename, mode='a', encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_filename, mode='a', encoding='utf-8')
-    ]
+    handlers=[file_handler]
 )
 logger = logging.getLogger(__name__)
 
@@ -139,7 +153,7 @@ def fetch_attachments():
 if __name__ == '__main__':
     logger.info("添付ファイル自動取得スクリプトを開始します。")
     logger.info(f"送信元: {TARGET_SENDER}")
-    logger.info(f"チェック間隔: {CHECK_INTERVAL // 60}分")
+    logger.info(f"チェック間隔: {CHECK_INTERVAL // 5}分")
     logger.info("----------------------------------------")
 
     while True:
