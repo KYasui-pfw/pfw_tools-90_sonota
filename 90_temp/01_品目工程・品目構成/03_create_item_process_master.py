@@ -71,7 +71,7 @@ def main():
     print("\n=== EJシステム（M_PUCH_UNIT_COST）データ取得 ===")
     try:
         srcd_sql = """
-        SELECT ITEM_CD, VEND_CD, EFF_PHASE_IN_DATE
+        SELECT ITEM_CD, VEND_CD, UNIT_COST, EFF_PHASE_IN_DATE
         FROM EXPJ2.M_PUCH_UNIT_COST
         ORDER BY ITEM_CD, EFF_PHASE_IN_DATE DESC
         """
@@ -81,10 +81,13 @@ def main():
         # 最新日付のレコードのみを抽出
         srcd_latest = srcd_df.groupby('ITEM_CD').first().reset_index()
         srcd_dict = dict(zip(srcd_latest['ITEM_CD'], srcd_latest['VEND_CD']))
+        srprice_dict = dict(zip(srcd_latest['ITEM_CD'], srcd_latest['UNIT_COST']))
         print(f"SRCD辞書作成: {len(srcd_dict)}件")
+        print(f"SRPRICE辞書作成: {len(srprice_dict)}件")
     except Exception as e:
         print(f"SRCD用データ取得エラー: {e}")
         srcd_dict = {}
+        srprice_dict = {}
     
     # EJシステムからLDTIME用データを取得
     print("\n=== EJシステム（M_ITEM）データ取得 ===")
@@ -109,6 +112,11 @@ def main():
     grouped = df.groupby('完成部番')
     
     for hmcd, group in grouped:
+        # 例外処理：特定のHMCDは処理対象外とする
+        if str(hmcd) in ['KS91-03006BA', 'KD64-00202BA']:
+            print(f"処理対象外: {hmcd}")
+            continue
+            
         # 同一HMCDに対して連番を付与
         for idx, (_, row) in enumerate(group.iterrows(), 1):
             # 前工程からKTCDを抽出（最初のハイフンまでの文字列）
@@ -118,15 +126,44 @@ def main():
             else:
                 ktcd = zenkatei  # ハイフンがない場合はそのまま
             
-            # KTCDの存在チェック
-            if ktcd not in valid_ktcd_set:
-                ktcd = ktcd + "（無）"
+            # KTCDの存在チェック（コメントアウト：後でテスト的に復活する可能性あり）
+            # if ktcd not in valid_ktcd_set:
+            #     ktcd = ktcd + "（無）"
             
-            # 前工程をキーにしてSRCDを取得、完成部番をキーにしてLDTIMEを取得
+            # KTCDの変換処理
+            if ktcd == "A0":
+                ktcd = "AO"
+            elif ktcd in ["PA1", "PA2"]:
+                ktcd = "PA"
+            
+            # 前工程をキーにしてSRCDとSRPRICEを取得、完成部番をキーにしてLDTIMEを取得
             zenkatei_key = str(row['前工程']) if pd.notna(row['前工程']) else ''
             srcd_value = srcd_dict.get(zenkatei_key, "無し")
+            srprice_value = srprice_dict.get(zenkatei_key, 0)
+            # SRCDで「無し」となっている項目は空欄にする
+            if srcd_value == "無し":
+                srcd_value = ""
             kansei_bango = str(hmcd) if pd.notna(hmcd) else ''
             ldtime_value = ldtime_dict.get(kansei_bango, 0)
+            
+            # SUPCLSCDの決定: KTCDがAO（AO（無）を含む）の場合は"6"、それ以外は"5"
+            supclscd_value = '6' if ktcd.startswith('AO') else '5'
+            
+            # KTCDがPEFINの場合の例外処理
+            if ktcd == 'PEFIN':
+                # PEFINの場合の特別な値設定
+                ldtime_final = 0  # 固定で0
+                srprice_final = 0.0  # 固定で0
+                csbcd_final = '10'  # 13ではなく10
+                rcvtstkbn_final = '2'  # 1ではなく2
+                rcvchkkbn_final = '2'  # 1ではなく2
+            else:
+                # 通常の処理
+                ldtime_final = int(ldtime_value) if ldtime_value is not None else 0
+                srprice_final = float(srprice_value) if srprice_value is not None else 0.0
+                csbcd_final = '13'  # 固定値"13"
+                rcvtstkbn_final = '1'  # 固定値"1"
+                rcvchkkbn_final = '1'  # 固定値"1"
             
             # M0840のレイアウトに従ってデータを変換
             record = {
@@ -134,21 +171,17 @@ def main():
                 'SEQ': idx,  # 同じHMCDの場合、1単位で連番
                 'KTSEQ': idx * 10,  # 同じHMCDの場合、10単位で連番
                 'KTCD': ktcd,  # 前工程の最初のハイフンまでの文字列（存在チェック済）
-                'SRCD': str(srcd_value),  # EJ M_PUCH_UNIT_COSTから取得
-                'SGNCD': '仮',  # 固定文字列"仮"
+                'SRCD': str(srcd_value) if srcd_value else '',  # EJ M_PUCH_UNIT_COSTから取得（無しは空欄）
+                'SGNCD': '',  # 空欄
                 'DDTIME': 0,  # 固定値"0"
                 'SGTIME': 0,  # 固定値"0"
-                'LDTIME': int(ldtime_value) if ldtime_value is not None else 0,  # EJ M_ITEMから取得
-                'SRPRICE': 0,  # 固定値"0"
-                'CSBCD': '10',  # 固定値"10"
-                'SUPCLSCD': '',  # 空欄
+                'LDTIME': ldtime_final,  # EJ M_ITEMから取得（PEFINの場合は0）
+                'SRPRICE': srprice_final,  # EJ M_PUCH_UNIT_COSTから取得（PEFINの場合は0）
+                'CSBCD': csbcd_final,  # 通常"13"、PEFINの場合"10"
+                'SUPCLSCD': supclscd_value,  # KTCDがAOの場合は"6"、それ以外は"5"
                 'SUPCD': '',  # 空欄
-                'RCVTSTKBN': '2',  # 固定値"2"
-                'RCVCHKKBN': '2',  # 固定値"2"
-                'INSTID': '',  # 空欄
-                'INSTDT': '',  # 空欄
-                'UPDTID': '',  # 空欄
-                'UPDTDT': ''  # 空欄
+                'RCVTSTKBN': rcvtstkbn_final,  # 固定値"1"
+                'RCVCHKKBN': rcvchkkbn_final  # 固定値"1"
             }
             
             output_data.append(record)
@@ -175,9 +208,12 @@ def main():
     print("KTSEQ (工順) ← 同じHMCDの場合、10単位で連番") 
     print("KTCD (工程コード) ← 14_品目工程work.csvの「前工程」の最初のハイフンまでの文字列（存在チェック済）")
     print("SRCD (仕入先コード) ← EJ M_PUCH_UNIT_COSTテーブルのVEND_CD（前工程をキーとして、最新日付優先）")
+    print("SRPRICE (購入単価) ← EJ M_PUCH_UNIT_COSTテーブルのUNIT_COST（前工程をキーとして、最新日付優先）")
     print("LDTIME (リードタイム) ← EJ M_ITEMテーブルのPUCH_FIXED_LT")
-    print("固定値: SGNCD='仮', DDTIME=0, SGTIME=0, SRPRICE=0, CSBCD='10', RCVTSTKBN='2', RCVCHKKBN='2'")
-    print("空欄: SUPCLSCD, SUPCD, INSTID, INSTDT, UPDTID, UPDTDT")
+    print("固定値: SGNCD='空欄', DDTIME=0, SGTIME=0, CSBCD='13', RCVTSTKBN='1', RCVCHKKBN='1'")
+    print("条件値: SUPCLSCD=KTCDがAO（AO（無）を含む）の場合は'6'、それ以外は'5'")
+    print("PEFIN例外処理: KTCD=PEFINの場合、LDTIME=0, SRPRICE=0, CSBCD='10', RCVTSTKBN='2', RCVCHKKBN='2'")
+    print("空欄: SGNCD, SUPCD")
     
     # 処理統計を表示
     print(f"\n=== 処理統計 ===")

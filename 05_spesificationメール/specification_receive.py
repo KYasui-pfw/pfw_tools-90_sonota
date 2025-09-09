@@ -41,7 +41,8 @@ LOG_DIR = os.getenv('LOG_DIR', 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # TimedRotatingFileHandlerを使用して日付でローテーション
-log_filename = os.path.join(LOG_DIR, f"log_{datetime.now().strftime('%Y%m%d')}.txt")
+import re
+log_filename = os.path.join(LOG_DIR, "log.txt")
 file_handler = TimedRotatingFileHandler(
     filename=log_filename,
     when='midnight',  # 毎日午前0時にローテーション
@@ -52,9 +53,10 @@ file_handler = TimedRotatingFileHandler(
     utc=False        # ローカル時間を使用
 )
 
-# ローテーション時のファイル名フォーマット設定（YYYYMMDD形式）
-file_handler.suffix = ".%Y%m%d"
-file_handler.extMatch = r"^\d{8}$"
+# ローテーション時のファイル名フォーマット設定（log_YYYYMMDD.txt形式）
+file_handler.suffix = "_%Y%m%d.txt"
+file_handler.extMatch = re.compile(r"^_\d{8}\.txt$")
+file_handler.namer = lambda name: name.replace('log.txt', 'log').replace('.txt_', '_')
 
 file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')

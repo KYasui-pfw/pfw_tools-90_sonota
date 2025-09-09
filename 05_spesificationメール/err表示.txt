@@ -1,0 +1,16 @@
+C:\Windows\py.exe
+削除対象のログファイルはありません(保持期間: 7日)
+--- Logging error ---
+Traceback (most recent call last):
+  File "C:\Users\administrator.PFW_DESIGN\AppData\Local\Programs\Python\Python312\Lib\logging\handlers.py", line 74, in emit
+    self.doRollover()
+  File "C:\Users\administrator.PFW_DESIGN\AppData\Local\Programs\Python\Python312\Lib\logging\handlers.py", line 445, in doRollover
+    for s in self.getFilesToDelete():
+  File "C:\Users\administrator.PFW_DESIGN\AppData\Local\Programs\Python\Python312\Lib\logging\handlers.py", line 388, in getFilesToDelete
+    if self.extMatch.fullmatch(suffix):
+AttributeError: 'str' object has no attribute 'fullmatch'
+Call Stack:
+  File "c:\python_tools\specification\specification_receive.py", line 272, in <module>
+    logger.info("メールの確認を開始します。")
+Message: 'メールの確認を開始します。'
+Arguments: ()
