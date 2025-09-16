@@ -56,7 +56,7 @@ file_handler = TimedRotatingFileHandler(
 # ローテーション時のファイル名フォーマット設定（log_YYYYMMDD.txt形式）
 file_handler.suffix = "_%Y%m%d.txt"
 file_handler.extMatch = re.compile(r"^_\d{8}\.txt$")
-file_handler.namer = lambda name: name.replace('log.txt', 'log').replace('.txt_', '_')
+file_handler.namer = lambda name: name.replace('log.txt.', 'log')
 
 file_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
