@@ -78,7 +78,71 @@ def main():
                        '単位数分子3', '単位数分母3', '前工程3', '単位数分子4', '単位数分母4', '前工程4', 
                        '単位数分子5', '単位数分母5', '前工程5', '単位数分子6', '単位数分母6', '前工程6']
         combined_df.columns = column_names
-        
+
+        print("\n=== 例外処理: KF22-002プレフィックス前工程2削除 ===")
+
+        # 完成部番が"KF22-002"で始まり、前工程2が"MC-"で始まるデータの前工程2を空欄にする
+        kf22_exception_count = 0
+        for idx, row in combined_df.iterrows():
+            kansei_buban = str(row['完成部番']) if pd.notna(row['完成部番']) else ""
+            zenkou2 = str(row['前工程2']) if pd.notna(row['前工程2']) else ""
+
+            if kansei_buban.startswith("KF22-002") and zenkou2.startswith("MC-"):
+                # 前工程2を空欄にする
+                combined_df.at[idx, '前工程2'] = ""
+                combined_df.at[idx, '単位数分子2'] = ""
+                combined_df.at[idx, '単位数分母2'] = ""
+                kf22_exception_count += 1
+
+        print(f"KF22-002例外処理完了: {kf22_exception_count}行の前工程2を削除")
+
+        print("\n=== 例外処理: 02_購買課_MA変換.csv処理 ===")
+
+        # 02_購買課_MA変換.csvを読み込み
+        ma_henkan_file = os.path.join(input_dir, "02_購買課_MA変換.csv")
+        ma_henkan_codes = set()
+
+        if os.path.exists(ma_henkan_file):
+            print(f"読み込み中: 02_購買課_MA変換.csv")
+            try:
+                ma_henkan_df = pd.read_csv(ma_henkan_file, encoding='utf-8-sig')
+            except UnicodeDecodeError:
+                ma_henkan_df = pd.read_csv(ma_henkan_file, encoding='shift_jis')
+
+            # カラム名を確認して完成部番を取得（最初のカラムが完成部番と仮定）
+            if len(ma_henkan_df.columns) > 0:
+                kansei_col = ma_henkan_df.columns[0]  # 最初のカラムを完成部番として使用
+                ma_henkan_codes.update(ma_henkan_df[kansei_col].dropna().astype(str))
+                print(f"02_購買課_MA変換.csv: {len(ma_henkan_df[kansei_col].dropna())}件の完成部番")
+        else:
+            print(f"02_購買課_MA変換.csvが見つかりません: {ma_henkan_file}")
+
+        # 02_購買課_MA変換.csvと一致した完成部番の処理
+        ma_henkan_count = 0
+        zenkou_columns = ['前工程1', '前工程2', '前工程3', '前工程4', '前工程5', '前工程6']
+        bunshi_columns = ['単位数分子1', '単位数分子2', '単位数分子3', '単位数分子4', '単位数分子5', '単位数分子6']
+        bunbo_columns = ['単位数分母1', '単位数分母2', '単位数分母3', '単位数分母4', '単位数分母5', '単位数分母6']
+
+        for idx, row in combined_df.iterrows():
+            kansei_buban = str(row['完成部番']) if pd.notna(row['完成部番']) else ""
+
+            if kansei_buban in ma_henkan_codes:
+                # 空欄でない一番右の前工程を見つける
+                rightmost_index = -1
+                for i in range(5, -1, -1):  # 前工程6から前工程1まで逆順でチェック
+                    zenkou_value = str(row[zenkou_columns[i]]) if pd.notna(row[zenkou_columns[i]]) else ""
+                    if zenkou_value.strip():  # 空欄でない場合
+                        rightmost_index = i
+                        break
+
+                if rightmost_index >= 0:
+                    # 一番右の前工程をMA-{完成部番}に変更
+                    combined_df.at[idx, zenkou_columns[rightmost_index]] = f"MA-{kansei_buban}"
+                    # 単位数分子、単位数分母は変更なし（ユーザー確認済み）
+                    ma_henkan_count += 1
+
+        print(f"02_購買課_MA変換処理完了: {ma_henkan_count}行の前工程をMA-変換")
+
         print("\n=== 指示27: 05_EJ_M_ITEM_生技実績突合.csvとの突合処理 ===")
         
         # 05_EJ_M_ITEM_生技実績突合.csvを読み込み
@@ -134,14 +198,18 @@ def main():
         combined_df.to_csv(combined_file, encoding='utf-8-sig', index=False, header=True)
         print(f"結合ファイル出力完了: {combined_file}")
         
-        print("\n=== ステップ1.5: 04_EJ678.csvと03_マシニング課管理工程.csvとの突合 ===")
-        
-        # 04_EJ678.csvと03_マシニング課管理工程.csvを読み込み
+        print("\n=== ステップ1.5: 04_EJ678.csv、03_マシニング課管理工程.csv、01_購買課_対象外.csvとの突合 ===")
+
+        # 04_EJ678.csv、03_マシニング課管理工程.csv、01_購買課_対象外.csv、03_購買課_そのまま.csvを読み込み
         ej_file = os.path.join(work_dir, "04_EJ678.csv")
         gaichu_file = os.path.join(work_dir, "03_マシニング課管理工程.csv")
-        
+        koubai_file = os.path.join(input_dir, "01_購買課_対象外.csv")
+        koubai_sonomama_file = os.path.join(input_dir, "03_購買課_そのまま.csv")
+
         ej_data = {}  # ITEM_CD -> PRODUCT_TYP のマッピング
         gaichu_codes = set()
+        koubai_codes = set()
+        koubai_sonomama_codes = set()
         
         # 04_EJ678.csvからITEM_CDとPRODUCT_TYPを取得
         if os.path.exists(ej_file):
@@ -167,13 +235,45 @@ def main():
             except UnicodeDecodeError:
                 # UTF-8で読めない場合はShift_JISを試す
                 gaichu_df = pd.read_csv(gaichu_file, encoding='shift_jis')
-            
+
             if 'FINAL_ITEM_CODE' in gaichu_df.columns:
                 gaichu_codes.update(gaichu_df['FINAL_ITEM_CODE'].dropna().astype(str))
                 print(f"03_マシニング課管理工程.csv: {len(gaichu_df['FINAL_ITEM_CODE'].dropna())}件のFINAL_ITEM_CODE")
-        
+
+        # 01_購買課_対象外.csvから完成部番を取得
+        if os.path.exists(koubai_file):
+            print(f"読み込み中: 01_購買課_対象外.csv")
+            try:
+                koubai_df = pd.read_csv(koubai_file, encoding='utf-8-sig')
+            except UnicodeDecodeError:
+                # UTF-8で読めない場合はShift_JISを試す
+                koubai_df = pd.read_csv(koubai_file, encoding='shift_jis')
+
+            # カラム名を確認して完成部番を取得（最初のカラムが完成部番と仮定）
+            if len(koubai_df.columns) > 0:
+                kansei_col = koubai_df.columns[0]  # 最初のカラムを完成部番として使用
+                koubai_codes.update(koubai_df[kansei_col].dropna().astype(str))
+                print(f"01_購買課_対象外.csv: {len(koubai_df[kansei_col].dropna())}件の完成部番")
+
+        # 03_購買課_そのまま.csvから完成部番を取得
+        if os.path.exists(koubai_sonomama_file):
+            print(f"読み込み中: 03_購買課_そのまま.csv")
+            try:
+                koubai_sonomama_df = pd.read_csv(koubai_sonomama_file, encoding='utf-8-sig')
+            except UnicodeDecodeError:
+                # UTF-8で読めない場合はShift_JISを試す
+                koubai_sonomama_df = pd.read_csv(koubai_sonomama_file, encoding='shift_jis')
+
+            # カラム名を確認して完成部番を取得（最初のカラムが完成部番と仮定）
+            if len(koubai_sonomama_df.columns) > 0:
+                kansei_col = koubai_sonomama_df.columns[0]  # 最初のカラムを完成部番として使用
+                koubai_sonomama_codes.update(koubai_sonomama_df[kansei_col].dropna().astype(str))
+                print(f"03_購買課_そのまま.csv: {len(koubai_sonomama_df[kansei_col].dropna())}件の完成部番")
+
         print(f"EJコード: {len(ej_data)}件")
         print(f"マシニング課管理工程コード: {len(gaichu_codes)}件")
+        print(f"購買課対象外コード: {len(koubai_codes)}件")
+        print(f"購買課そのままコード: {len(koubai_sonomama_codes)}件")
         
         # ヘッダー付きでDataFrameを再読み込み
         df = pd.read_csv(combined_file, encoding='utf-8-sig')
@@ -186,8 +286,10 @@ def main():
             data_rows = df.copy()
             
             # 指示18の条件: 04_EJ678.csvの「ITEM_CD」または03_マシニング課管理工程.csvの「FINAL_ITEM_CODE」が一致する行を対象外とする
+            # 追加: 01_購買課_対象外.csvの完成部番と一致する行も対象外とする
             ej_matched = data_rows['完成部番_str'].isin(ej_data.keys())
             gaichu_matched = data_rows['完成部番_str'].isin(gaichu_codes)
+            koubai_matched = data_rows['完成部番_str'].isin(koubai_codes)
             
             # 指示26の条件: 最大前工程番号がSKD/SUJで始まる行も対象外とする
             skd_suj_matched = []
@@ -211,8 +313,8 @@ def main():
             # 指示28の条件: 完成部番が"TS-"で始まるデータは例外的に全て07_matched_前工程横展開.csvに振り分ける
             ts_prefix_mask = data_rows['完成部番_str'].str.startswith('TS-', na=False)
             
-            # 条件: 04_EJ678.csv、03_マシニング課管理工程.csv、SKD/SUJ、またはTS-プレフィックスいずれかと一致する（対象外）
-            matched_mask = ej_matched | gaichu_matched | skd_suj_mask | ts_prefix_mask
+            # 条件: 04_EJ678.csv、03_マシニング課管理工程.csv、01_購買課_対象外.csv、SKD/SUJ、またはTS-プレフィックスいずれかと一致する（対象外）
+            matched_mask = ej_matched | gaichu_matched | koubai_matched | skd_suj_mask | ts_prefix_mask
             
             matched_rows = data_rows[matched_mask]
             unmatched_rows = data_rows[~matched_mask]
@@ -220,6 +322,7 @@ def main():
             print(f"一致した行: {len(matched_rows)}行")
             print(f"  - EJ678一致: {ej_matched.sum()}行")
             print(f"  - マシニング課管理工程一致: {gaichu_matched.sum()}行")
+            print(f"  - 購買課対象外一致: {koubai_matched.sum()}行")
             print(f"  - SKD/SUJ最大前工程: {skd_suj_mask.sum()}行")
             print(f"  - TS-プレフィックス: {ts_prefix_mask.sum()}行")
             print(f"一致しなかった行: {len(unmatched_rows)}行")
@@ -238,13 +341,16 @@ def main():
                 matched_values = []
                 for idx, row in matched_rows_clean.iterrows():
                     item_code = str(row['完成部番']) if pd.notna(row['完成部番']) else ""
-                    
+
                     if item_code in ej_data:
                         # 04_EJ678.csvとマッチした場合：PRODUCT_TYPの値
                         matched_values.append(ej_data[item_code])
                     elif item_code in gaichu_codes:
                         # 03_マシニング課管理工程.csvとマッチした場合："machine"
                         matched_values.append("machine")
+                    elif item_code in koubai_codes:
+                        # 01_購買課_対象外.csvとマッチした場合："koubai_excluded"
+                        matched_values.append("koubai_excluded")
                     elif idx in data_rows.index and skd_suj_mask.loc[idx]:
                         # SKD/SUJ最大前工程とマッチした場合："skd_suj"
                         matched_values.append("skd_suj")
@@ -318,13 +424,16 @@ def main():
                 force_non_ma = kansei_buban in force_non_ma_items
                 
                 # 指示29の条件: 前工程1が"PEFIN-"で始まり、前工程2が空欄ではなく、前工程3が空欄のものは例外的に09_MA_prefix_data.csvに振り分ける
-                pefin_exception = (zenkou1.startswith("PEFIN-") and 
+                pefin_exception = (zenkou1.startswith("PEFIN-") and
                                  zenkou2 != "" and zenkou2 != "nan" and pd.notna(row.iloc[7]) and
                                  (zenkou3 == "" or zenkou3 == "nan")) and not force_non_ma  # 指示30が優先
-                
+
+                # 03_購買課_そのまま.csv例外処理: 指定された完成部番は強制的に09_MA_prefix_data.csvに振り分ける
+                koubai_sonomama_exception = kansei_buban in koubai_sonomama_codes and not force_non_ma  # 指示30が優先
+
                 if force_non_ma:
                     non_ma_rows.append(row)
-                elif rightmost_zenkou.startswith("MA-") or ao_exception or pefin_exception:
+                elif rightmost_zenkou.startswith("MA-") or ao_exception or pefin_exception or koubai_sonomama_exception:
                     ma_rows.append(row)
                 else:
                     non_ma_rows.append(row)
@@ -473,14 +582,36 @@ def process_step4_ma_data(output_dir, input_filename):
     # 前工程が空白でない行のみ抽出
     non_empty_df = df[df['前工程'].notna() & (df['前工程'].astype(str).str.strip() != "")]
     
+    # 03_購買課_そのまま.csvを読み込み
+    # output_dir = "work" なので、親ディレクトリの "input" を取得
+    parent_dir = os.path.dirname(output_dir)  # 01_品目工程・品目構成ディレクトリ
+    input_dir = os.path.join(parent_dir, "input")
+    koubai_sonomama_file = os.path.join(input_dir, "03_購買課_そのまま.csv")
+    koubai_sonomama_codes = set()
+
+    if os.path.exists(koubai_sonomama_file):
+        try:
+            koubai_sonomama_df = pd.read_csv(koubai_sonomama_file, encoding='utf-8-sig')
+        except UnicodeDecodeError:
+            koubai_sonomama_df = pd.read_csv(koubai_sonomama_file, encoding='shift_jis')
+
+        if len(koubai_sonomama_df.columns) > 0:
+            kansei_col = koubai_sonomama_df.columns[0]
+            koubai_sonomama_codes.update(koubai_sonomama_df[kansei_col].dropna().astype(str))
+
     # 指示29の条件: 同じ完成部番でNo6が"PEFIN-"で始まり、No5が空欄ではなく、No4が空欄の条件を満たすデータについて、No5を品目構成に振り分け
     pefin_kousei_rows = []
     pefin_condition_items = set()
+
+    # 03_購買課_そのまま.csv条件: 完成部番が一致する行で、空欄を除いた行のうち最も番号が小さい行
+    koubai_sonomama_kousei_rows = []
+    koubai_sonomama_condition_items = set()
     
-    # まず、PEFIN-条件を満たすデータを特定
+    # PEFIN-条件と03_購買課_そのまま.csv条件を特定
     for completion_code, group in non_empty_df.groupby('完成部番'):
         group_sorted = group.sort_values('No')
-        
+
+        # PEFIN-条件をチェック
         # No6(最後の工程)がPEFIN-で始まるかチェック
         no6_rows = group_sorted[group_sorted['No'] == 6]
         if len(no6_rows) > 0:
@@ -489,25 +620,38 @@ def process_step4_ma_data(output_dir, input_filename):
                 # No5が空欄ではなく、No4が空欄かチェック
                 no5_rows = group_sorted[group_sorted['No'] == 5]
                 no4_rows = group_sorted[group_sorted['No'] == 4]
-                
+
                 has_no5 = len(no5_rows) > 0 and str(no5_rows.iloc[0]['前工程']).strip() not in ["", "nan"]
                 has_no4 = len(no4_rows) > 0 and str(no4_rows.iloc[0]['前工程']).strip() not in ["", "nan"]
-                
+
                 if has_no5 and not has_no4:
                     # 条件を満たす：No5を品目構成に振り分け
                     pefin_condition_items.add(completion_code)
                     pefin_kousei_rows.extend(no5_rows.index.tolist())
+
+        # 03_購買課_そのまま.csv条件をチェック
+        if completion_code in koubai_sonomama_codes:
+            # 空欄を除いた行のうち最も番号が小さい行を取得
+            non_empty_group = group_sorted[group_sorted['前工程'].notna() & (group_sorted['前工程'].astype(str).str.strip() != "")]
+            if len(non_empty_group) > 0:
+                smallest_no_row = non_empty_group.iloc[0]  # group_sortedなので最初の行が最小番号
+                koubai_sonomama_condition_items.add(completion_code)
+                koubai_sonomama_kousei_rows.append(smallest_no_row.name)
     
-    # MA-で始まる行 + PEFIN条件でNo5の行
+    # MA-で始まる行 + PEFIN条件でNo5の行 + 03_購買課_そのまま.csv条件
     ma_condition = non_empty_df['前工程'].astype(str).str.startswith("MA-")
     pefin_no5_condition = non_empty_df.index.isin(pefin_kousei_rows)
-    
-    ma_rows = non_empty_df[ma_condition | pefin_no5_condition]
-    non_ma_rows = non_empty_df[~(ma_condition | pefin_no5_condition)]
+    koubai_sonomama_condition = non_empty_df.index.isin(koubai_sonomama_kousei_rows)
+
+    ma_rows = non_empty_df[ma_condition | pefin_no5_condition | koubai_sonomama_condition]
+    non_ma_rows = non_empty_df[~(ma_condition | pefin_no5_condition | koubai_sonomama_condition)]
     
     if len(pefin_condition_items) > 0:
         print(f"指示29条件適用: {len(pefin_condition_items)}件の完成部番でNo5を品目構成に移動")
-    
+
+    if len(koubai_sonomama_condition_items) > 0:
+        print(f"03_購買課_そのまま.csv条件適用: {len(koubai_sonomama_condition_items)}件の完成部番で最小番号行を品目構成に移動")
+
     print(f"前工程空白削除後: {len(non_empty_df)}行")
     print(f"MA-で始まる行: {len(ma_rows)}行 → 13_品目構成work.csv")
     print(f"MA-で始まらない行: {len(non_ma_rows)}行 → 14_品目工程work.csv")
