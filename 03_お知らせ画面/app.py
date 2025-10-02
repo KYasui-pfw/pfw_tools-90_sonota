@@ -335,20 +335,38 @@ def main():
             )
         
         with col2:
-            start_date = st.date_input(
-                "お知らせ開始日 *",
-                value=default_start,
-                min_value=datetime.now().date(),
-                help="お知らせの表示開始日を選択してください",
-                key=f"start_{st.session_state.form_counter}"
-            )
+            # 新規作成は本日以降、編集モードは制限なし
+            if edit_mode and selected_notice:
+                # 編集モードでは過去の日付も許可するため、min_valueを設定しない
+                start_date = st.date_input(
+                    "お知らせ開始日 *",
+                    value=default_start,
+                    help="お知らせの表示開始日を選択してください",
+                    key=f"start_{st.session_state.form_counter}"
+                )
+            else:
+                # 新規作成は本日以降のみ
+                start_date = st.date_input(
+                    "お知らせ開始日 *",
+                    value=default_start,
+                    min_value=datetime.now().date(),
+                    help="お知らせの表示開始日を選択してください",
+                    key=f"start_{st.session_state.form_counter}"
+                )
         
         with col3:
+            # 編集モードの場合は元の終了日も許可、新規作成の場合は今日+60日まで
             max_end_date = datetime.now().date() + timedelta(days=60)
+            min_end_date = start_date
+            if edit_mode and selected_notice:
+                if default_end > max_end_date:
+                    max_end_date = default_end
+                if default_end < min_end_date:
+                    min_end_date = default_end
             end_date = st.date_input(
                 "お知らせ終了日 *",
-                value=min(default_end, max_end_date),
-                min_value=start_date,
+                value=default_end,
+                min_value=min_end_date,
                 max_value=max_end_date,
                 help="お知らせの表示終了日を選択してください（本日から最大2カ月）",
                 key=f"end_{st.session_state.form_counter}"
