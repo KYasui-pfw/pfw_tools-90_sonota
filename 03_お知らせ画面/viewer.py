@@ -58,10 +58,11 @@ DATABASE_PATH = "notices.db"
 def auto_delete_expired_notices():
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
-    thirty_days_ago = datetime.now() - timedelta(days=30)
+    jst = pytz.timezone('Asia/Tokyo')
+    thirty_days_ago = datetime.now(jst) - timedelta(days=30)
     cursor.execute('''
-        UPDATE notices 
-        SET deleted_at = CURRENT_TIMESTAMP 
+        UPDATE notices
+        SET deleted_at = CURRENT_TIMESTAMP
         WHERE end_date < ? AND deleted_at IS NULL
     ''', (thirty_days_ago.date(),))
     deleted_count = cursor.rowcount
@@ -73,11 +74,12 @@ def get_active_notices():
     conn = sqlite3.connect(DATABASE_PATH)
     # 終了日が今日に近い順（昇順）でソート
     # end_date >= todayにより、終了日翌日から自動的に非表示になる
-    today = datetime.now().date()
+    jst = pytz.timezone('Asia/Tokyo')
+    today = datetime.now(jst).date()
     df = pd.read_sql_query('''
-        SELECT * FROM notices 
-        WHERE deleted_at IS NULL 
-        AND start_date <= ? 
+        SELECT * FROM notices
+        WHERE deleted_at IS NULL
+        AND start_date <= ?
         AND end_date >= ?
         ORDER BY end_date ASC, start_date ASC
     ''', conn, params=(today, today))
