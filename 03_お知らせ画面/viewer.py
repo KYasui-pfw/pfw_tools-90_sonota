@@ -89,15 +89,16 @@ def get_active_notices():
 @st.dialog("お知らせ詳細")
 def show_notice_dialog(notice):
     """お知らせの詳細をモーダルダイアログで表示"""
-    emoji_display = notice.get('emoji', '📋')
-    
+    emoji_display = notice.get('emoji', '')
+    emoji_prefix = f"{emoji_display} " if emoji_display else ""
+
     # 日付をmm/dd形式に変換
     from datetime import datetime
     start_date = datetime.strptime(notice['start_date'], '%Y-%m-%d').strftime('%m/%d')
     end_date = datetime.strptime(notice['end_date'], '%Y-%m-%d').strftime('%m/%d')
-    
+
     # ヘッダー情報
-    st.markdown(f"### {emoji_display} {notice['title']}")
+    st.markdown(f"### {emoji_prefix}{notice['title']}")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -117,16 +118,17 @@ def show_notice_dialog(notice):
 
 def display_notice_card(notice):
     """お知らせカードを表示する関数"""
-    emoji_display = notice.get('emoji', '📋')
-    
+    emoji_display = notice.get('emoji', '')
+    emoji_prefix = f"{emoji_display} " if emoji_display else ""
+
     # 日付をmm/dd形式に変換
     from datetime import datetime
     start_date = datetime.strptime(notice['start_date'], '%Y-%m-%d').strftime('%m/%d')
     end_date = datetime.strptime(notice['end_date'], '%Y-%m-%d').strftime('%m/%d')
-    
+
     # クリック可能なカード表示
     if st.button(
-        f"{emoji_display} {notice['title']}\n({notice['department']}) | {start_date} ～ {end_date}",
+        f"{emoji_prefix}{notice['title']}\n({notice['department']}) | {start_date} ～ {end_date}",
         key=f"notice_{notice['id']}",
         use_container_width=True
     ):

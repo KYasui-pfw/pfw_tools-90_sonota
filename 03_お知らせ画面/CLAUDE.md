@@ -67,11 +67,11 @@ docker-compose up --build
 notices (
     id TEXT PRIMARY KEY,        -- UUID
     department TEXT NOT NULL,   -- Max 10 chars
-    start_date DATE NOT NULL,   -- Today or later
+    start_date DATE NOT NULL,   -- Any date (past dates allowed)
     end_date DATE NOT NULL,     -- Max 2 months from today
-    title TEXT NOT NULL,        -- Max 20 chars
+    title TEXT NOT NULL,        -- Max 30 chars
     content TEXT NOT NULL,      -- Max 1200 chars, markdown supported
-    emoji TEXT DEFAULT '📋',   -- Display emoji
+    emoji TEXT DEFAULT '',     -- Display emoji (optional)
     created_at TIMESTAMP,       -- JST timezone
     deleted_at TIMESTAMP NULL   -- Logical deletion
 )
@@ -99,16 +99,15 @@ users (
 
 ### Business Logic Constraints
 
-**Notice Validation (New Creation):**
-- Start date: Today or later
+**Notice Validation:**
+- Start date: Any date (past dates allowed)
 - End date: Max 2 months from today, must be >= start date
 - Department: 1-10 characters
-- Title: 1-20 characters
+- Title: 1-30 characters
 - Content: 1-1200 characters (markdown supported)
 
 **Notice Validation (Edit Mode):**
-- When editing existing notices, date constraints are relaxed:
-  - `min_value` for start_date: Uses the notice's original start_date (allows past dates)
+- When editing existing notices, date constraints are relaxed for end_date:
   - `min_value` for end_date: Uses the notice's original end_date if < start_date
   - `max_value` for end_date: Uses the notice's original end_date if > today+60 days
 - This allows editing of historical notices without date validation errors

@@ -62,7 +62,7 @@ def init_database():
             end_date DATE NOT NULL,
             title TEXT NOT NULL,
             content TEXT NOT NULL,
-            emoji TEXT DEFAULT '📋',
+            emoji TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             deleted_at TIMESTAMP NULL
         )
@@ -226,17 +226,14 @@ def validate_input(department, start_date, end_date, title, content):
     if not department or len(department) > 10:
         errors.append("部門は1文字以上10文字以下で入力してください。")
     
-    if start_date < datetime.now().date():
-        errors.append("お知らせ開始日は本日以降の日付を選択してください。")
-    
     if end_date > datetime.now().date() + timedelta(days=60):
         errors.append("お知らせ終了日は本日から2カ月以内で設定してください。")
     
     if end_date < start_date:
         errors.append("終了日は開始日以降の日付を選択してください。")
     
-    if not title or len(title) > 20:
-        errors.append("タイトルは1文字以上20文字以下で入力してください。")
+    if not title or len(title) > 30:
+        errors.append("タイトルは1文字以上30文字以下で入力してください。")
     
     if not content or len(content) > 1200:
         errors.append("本文は1文字以上1200文字以下で入力してください。")
@@ -322,7 +319,7 @@ def main():
         default_end = datetime.strptime(selected_notice[3], "%Y-%m-%d").date() if selected_notice else datetime.now().date() + timedelta(days=7)
         default_title = selected_notice[4] if selected_notice else ""
         default_content = selected_notice[5] if selected_notice else ""
-        default_emoji = selected_notice[6] if selected_notice else "📋"
+        default_emoji = selected_notice[6] if selected_notice else ""
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -335,24 +332,13 @@ def main():
             )
         
         with col2:
-            # 新規作成は本日以降、編集モードは制限なし
-            if edit_mode and selected_notice:
-                # 編集モードでは過去の日付も許可するため、min_valueを設定しない
-                start_date = st.date_input(
-                    "お知らせ開始日 *",
-                    value=default_start,
-                    help="お知らせの表示開始日を選択してください",
-                    key=f"start_{st.session_state.form_counter}"
-                )
-            else:
-                # 新規作成は本日以降のみ
-                start_date = st.date_input(
-                    "お知らせ開始日 *",
-                    value=default_start,
-                    min_value=datetime.now().date(),
-                    help="お知らせの表示開始日を選択してください",
-                    key=f"start_{st.session_state.form_counter}"
-                )
+            # 過去の日付も選択可能
+            start_date = st.date_input(
+                "お知らせ開始日 *",
+                value=default_start,
+                help="お知らせの表示開始日を選択してください",
+                key=f"start_{st.session_state.form_counter}"
+            )
         
         with col3:
             # 編集モードの場合は元の終了日も許可、新規作成の場合は今日+60日まで
@@ -375,20 +361,20 @@ def main():
         col_emoji, col_title = st.columns([1, 4])
         
         with col_emoji:
-            emoji_options = ["📋", "📢", "🔔", "⚠️", "💡", "📝", "🎉", "🚨", "📊", "💼"]
+            emoji_options = ["", "📋", "📢", "🔔", "⚠️", "💡", "📝", "🎉", "🚨", "📊", "💼"]
             emoji = st.selectbox(
-                "絵文字 *",
+                "絵文字",
                 emoji_options,
                 index=emoji_options.index(default_emoji) if default_emoji in emoji_options else 0,
-                help="一覧で表示する絵文字を選択してください",
+                help="一覧で表示する絵文字を選択してください（空欄も可）",
                 key=f"emoji_{st.session_state.form_counter}"
             )
         
         with col_title:
             title = st.text_input(
-                "タイトル (最大20文字) *",
+                "タイトル (最大30文字) *",
                 value=default_title,
-                max_chars=20,
+                max_chars=30,
                 help="お知らせのタイトルを入力してください",
                 key=f"title_{st.session_state.form_counter}"
             )
@@ -459,8 +445,9 @@ def main():
                 st.write("※終了日から30日で自動削除されます")
             
             for _, notice in notices_df.iterrows():
-                emoji_display = notice.get('emoji', '📋')
-                with st.expander(f"{emoji_display} {notice['title']} ({notice['department']}) | {notice['start_date']} ～ {notice['end_date']}"):
+                emoji_display = notice.get('emoji', '')
+                emoji_prefix = f"{emoji_display} " if emoji_display else ""
+                with st.expander(f"{emoji_prefix}{notice['title']} ({notice['department']}) | {notice['start_date']} ～ {notice['end_date']}"):
                     col1, col2 = st.columns([3, 1])
                     
                     with col1:
