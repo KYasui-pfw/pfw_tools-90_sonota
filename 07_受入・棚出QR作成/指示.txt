@@ -1,0 +1,4 @@
+## 指示1
+- stliteでrBOMから社員の氏名をプルダウンで選択するだけの仕組みを作ります。
+- データはC:\Dev\01_Back_APIServer\fastapi_appのgeneric_queryを用います。これは開発環境なので、実際は'http://pfw-api/query'でアクセス可能です。そちらから取得してください。
+- テーブルはM0540です。TANNMとTANCDを取得します。TANNMをプルダウンで取得すると、TANCDが表示される仕組みにしてください。
