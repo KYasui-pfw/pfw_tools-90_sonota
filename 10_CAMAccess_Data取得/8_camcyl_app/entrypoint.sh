@@ -15,4 +15,12 @@ echo ""
 # cronをフォアグラウンドで起動
 echo "cron デーモンを起動します（15分ごとに自動実行）..."
 echo "======================================================"
+echo ""
+
+# crontabの内容を確認
+echo "登録されているcrontab:"
+cat /etc/cron.d/camcyl-cron
+echo ""
+
+# cronをフォアグラウンドで起動（環境変数を引き継ぐ）
 exec cron -f -L 2

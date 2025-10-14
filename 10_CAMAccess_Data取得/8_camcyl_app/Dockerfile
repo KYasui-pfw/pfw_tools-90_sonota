@@ -38,7 +38,7 @@ RUN chmod +x /app/scripts/*.sh /app/entrypoint.sh
 # crontabファイルをコピーして設定
 COPY crontab /etc/cron.d/camcyl-cron
 RUN chmod 0644 /etc/cron.d/camcyl-cron && \
-    crontab /etc/cron.d/camcyl-cron
+    touch /var/log/cron.log
 
 # ログディレクトリを作成
 RUN mkdir -p /app/logs /app/data /app/output/KakouDenpyo /app/output/KakouJisseki

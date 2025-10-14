@@ -167,11 +167,23 @@ tail -f logs/process2_YYYYMMDD.log
 ### cronが実行されない
 
 ```bash
-# コンテナ内でcronの状態確認
+# 1. コンテナ内でcronの状態確認
 docker-compose exec camcyl-app pgrep cron
 
-# cronログ確認
+# 2. cronログ確認
 docker-compose exec camcyl-app cat /app/logs/cron.log
+
+# 3. crontab設定を確認
+docker-compose exec camcyl-app cat /etc/cron.d/camcyl-cron
+
+# 4. cronのシステムログを確認
+docker-compose exec camcyl-app grep CRON /var/log/syslog
+
+# 5. 手動でスクリプトを実行してテスト
+docker-compose exec camcyl-app /app/scripts/run_all.sh
+
+# 6. cronを再起動
+docker-compose restart camcyl-app
 ```
 
 ### ネットワークドライブにアクセスできない
