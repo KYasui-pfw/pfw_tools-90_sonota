@@ -1,0 +1,39 @@
+services:
+  camcyl-app:
+    build: .
+    container_name: camcyl-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # ネットワークドライブ（読み取り専用）
+      - /mnt/schejule:/mnt/schejule:ro
+
+      # rBOMディレクトリ（読み取り専用）
+      - /home/docker-user/rBOM:/app/rBOM:ro
+
+      # 出力先ディレクトリ
+      - /home/docker-user/KakouDenpyo:/app/output/KakouDenpyo
+      - /home/docker-user/KakouJisseki:/app/output/KakouJisseki
+
+      # ローカルディレクトリ
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+      # スクリプトファイルの更新を反映（開発時のみ）
+      - ./scripts:/app/scripts
+
+    # ログ設定
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # ヘルスチェック
+    healthcheck:
+      test: ["CMD", "pgrep", "cron"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

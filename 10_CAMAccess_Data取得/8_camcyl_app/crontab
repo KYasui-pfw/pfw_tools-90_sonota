@@ -1,0 +1,11 @@
+# CAM/CYL Access データベース抽出処理
+# 15分ごとに処理1と処理2を並列実行
+
+# 環境変数を読み込む
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# 15分ごとに実行（0, 15, 30, 45分）
+*/15 * * * * root cd /app && /app/scripts/run_all.sh >> /app/logs/cron.log 2>&1
+
+# 空行が必要（cronの仕様）

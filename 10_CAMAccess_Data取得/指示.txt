@@ -1,0 +1,40 @@
+## 指示１
+- "C:\Dev\90_tools\10_CAMAccess_Data取得\cam_access"の処理を踏まえて、以下の処理を作ろうと考えています。
+- /home/docker-user/docker-apps/8_camcyl_app がアプリケーションフォルダです。ここに今から記述する処理をまとめて、良い構成を考えてください。
+
+### 処理1
+- /home/docker-user/rBOM　のディレクトリ配下の深いパスにcsvファイルが4つあります。このファイルを15分に1度コピーします。パスは変動する可能性があるため、envかiniなどのtext系の環境ファイルを読み取って処理します。コピー先に同じファイル名でファイルがあった場合は上書きします。
+- 上記4ファイルのうち、2ファイルはいくつかの項目の削除と重複の行の削除を行ったうえでコピーします。どの項目を削除するかは別の指示で指示します。
+- /home/docker-user/KakouDenpyo　コピー先は左記のディレクトリです。
+- 15分に一度実行します
+
+### 処理2
+- "\\172.17.81.101\schejule\cylline\Cyl_pfw_table.accdb"　と"\\172.17.81.101\schejule\camline\EJ\EJ_DETA_SERVER\EJデータマスター.accdb"を /home/docker-user/docker-apps/8_camcyl_app/data　にコピーします。コピー先に同じファイル名でファイルがあった場合は上書きします。
+- C:\Dev\90_tools\10_CAMAccess_Data取得\cam_accessの処理を応用して、/home/docker-user/docker-apps/8_camcyl_app/dataをinputに処理を行い、処理結果のcsvを/home/docker-user/KakouJissekiに出力します
+- 15分に一度実行します
+
+### 処理3
+- 将来的に、もう一つ処理を追加します。それは/home/docker-user/KakouJissekiをinputにして、APIサーバーを経由して更新処理を行います。これは現時点ではまだ実装しません。
+- ただ、csvの出力後すぐに実行します。
+
+## 回答1
+
+### 1.処理1について
+- 現在のpathは以下です
+  - rBOM/rBOM_bat/PFW_OT/File/KAKOU_EXP/CAM/CAMKakouDenpyou.csv
+  - rBOM/rBOM_bat/PFW_OT/File/KAKOU_EXP/CAM/CONV.csv
+  - rBOM/rBOM_bat/PFW_OT/File/KAKOU_EXP/CAM/SEISANKI.csv
+  - rBOM/rBOM_bat/PFW_OT/File/KAKOU_EXP/M_S/ASPKakouDenpyo.csv
+- このうち、CAMKakouDenpyou.csvとASPKakouDenpyo.csvが項目削除と重複削除を行います。
+- 項目削除の対象はあとで設定します。
+
+### 2.ネットワークドライブ
+- マウントしていません。マウントする手順を教えてください
+
+### 3.cronの方がいいような気がします。dockerを使用する場合は、コンテナ内の方が良いでしょうか？　その場合はコンテナでお願いします
+
+### 4.どちらでもいいです。用途に応じて、一般的な方を選択してください
+
+### 5.ログは1周間にしてください
+
+### 6.並列実行でＯＫです
