@@ -312,6 +312,8 @@ class MappingEngine:
                     # 数量差分処理が有効な場合：EJ発注ごとに複数rBOM行を消化
                     ej_idx = 0
                     rbom_idx = 0
+                    # rBOM残数を管理する辞書 ((order_no, line_no) -> 残数量) - 品目コードグループ全体で共有
+                    rbom_remaining_map = {}
 
                     while ej_idx < len(ej_group) and rbom_idx < len(rbom_group):
                         ej_row = ej_group.iloc[ej_idx]
@@ -352,6 +354,7 @@ class MappingEngine:
                             ej_sequence = max(existing_ej_sequences) + 1 if existing_ej_sequences else 1
 
                             # EJ残数量を複数rBOM行に順次割り当て
+
                             while ej_remaining > 0 and rbom_idx < len(rbom_group):
                                 rbom_row = rbom_group.iloc[rbom_idx]
 
@@ -370,9 +373,23 @@ class MappingEngine:
 
                                 # rBOMデータのバリデーション
                                 if pd.notna(rbom_row['order_no']) and pd.notna(rbom_row['line_no']):
-                                    rbom_qty_num = float(rbom_row['order_quantity'])
                                     rbom_order_no_str = rbom_row['order_no']
                                     rbom_line_no_int = rbom_row['line_no']
+                                    rbom_original_idx = rbom_row['rbom_original_idx']
+                                    rbom_key = (rbom_order_no_str, rbom_line_no_int)
+
+                                    # DEBUG: キーと辞書の内容を確認
+                                    logger.debug(f"  [DEBUG] rbom_key={rbom_key} (型: {type(rbom_key[0])}, {type(rbom_key[1])})")
+                                    logger.debug(f"  [DEBUG] rbom_remaining_map keys={list(rbom_remaining_map.keys())}")
+                                    logger.debug(f"  [DEBUG] rbom_key in map? {rbom_key in rbom_remaining_map}")
+
+                                    # rBOM数量を取得（残数がある場合は残数を使用）
+                                    if rbom_key in rbom_remaining_map:
+                                        rbom_qty_num = rbom_remaining_map[rbom_key]
+                                        logger.debug(f"  [DEBUG] 残数マップから取得: {rbom_qty_num}")
+                                    else:
+                                        rbom_qty_num = float(rbom_row['order_quantity'])
+                                        logger.debug(f"  [DEBUG] 元数量から取得: {rbom_qty_num}")
 
                                     # 既存の連番を確認してrBOM連番を取得（手動マッピングの連番を引き継ぐ）
                                     existing_rbom_sequences = [r.get('rbom_m_sequence') for r in mapping_results
@@ -414,33 +431,29 @@ class MappingEngine:
 
                                     # マッピング済みとして記録
                                     ej_matched.add(ej_row['ej_original_idx'])
-                                    rbom_matched.add(rbom_row['rbom_original_idx'])
+                                    rbom_matched.add(rbom_original_idx)
                                     match_count += 1
 
-                                    logger.debug(f"  数量消化: EJ({ej_order_no}, 連番{ej_sequence}) x rBOM({rbom_order_no_str}+{rbom_line_no_int}, 連番{rbom_sequence}) - マッピング量{mapping_qty}")
+                                    logger.debug(f"  数量消化: EJ({ej_order_no}, 連番{ej_sequence}) x rBOM({rbom_order_no_str}+{rbom_line_no_int}, 連番{rbom_sequence}) - マッピング量{mapping_qty}, 元数量{float(rbom_row['order_quantity'])}, 使用数量{rbom_qty_num}")
 
                                     # 残数量を更新
                                     ej_remaining -= mapping_qty
                                     rbom_remaining = rbom_qty_num - mapping_qty
 
-                                    # rBOM残数がある場合、連番を増やしてrBOM_ONLYとして追加
+                                    # rBOM残数がある場合、残数マップに保存（次のループで再利用）
                                     if rbom_remaining > 0:
-                                        rbom_sequence_next = rbom_sequence + 1
-                                        rbom_series_remaining = pd.Series({
-                                            'order_no': rbom_order_no_str,
-                                            'line_no': rbom_line_no_int,
-                                            'item_code': rbom_row['item_code'],
-                                            'item_name': rbom_row['item_name'],
-                                            'order_quantity': rbom_remaining,
-                                            'delivery_date': rbom_row['delivery_date'],
-                                            'seino': rbom_row['seino']
-                                        })
-                                        result_remaining = self._create_mapping_result(None, rbom_series_remaining, '自動',
-                                                                                       rbom_m_sequence=rbom_sequence_next)
-                                        mapping_results.append(result_remaining)
-                                        logger.debug(f"  rBOM残数追加: rBOM({rbom_order_no_str}+{rbom_line_no_int}, 連番{rbom_sequence_next}) - 残数{rbom_remaining}")
+                                        rbom_remaining_map[rbom_key] = rbom_remaining
+                                        logger.debug(f"  rBOM残数保存: rBOM({rbom_order_no_str}+{rbom_line_no_int}) - 残数{rbom_remaining} (次のマッピングで再利用)")
+                                        logger.debug(f"  [DEBUG] 残数保存後のマップ: {dict(rbom_remaining_map)}")
+                                        # 同じrBOM行を再度処理するため、rbom_idxを進めない
+                                    else:
+                                        # rBOM数量が完全に消化された場合のみ次の行へ
+                                        rbom_idx += 1
+                                        # 残数マップから削除（既に消化済み）
+                                        rbom_remaining_map.pop(rbom_key, None)
+                                        logger.debug(f"  rBOM完全消化: rBOM({rbom_order_no_str}+{rbom_line_no_int}) - 次の行へ")
+                                        logger.debug(f"  [DEBUG] 完全消化後のマップ: {dict(rbom_remaining_map)}")
 
-                                    rbom_idx += 1
                                     ej_sequence += 1
                                 else:
                                     # rBOMデータが無効な場合はスキップ
@@ -489,6 +502,44 @@ class MappingEngine:
                             rbom_idx += 1
 
                         ej_idx += 1
+
+                    # 品目コードグループのEJ処理完了後、rbom_remaining_mapに残っている残数をrBOM_ONLYとして追加
+                    logger.debug(f"  品目コード={item_code} のEJ処理完了、rbom_remaining_map残存確認")
+                    for (rbom_order_no_str, rbom_line_no_int), rbom_remaining_qty in rbom_remaining_map.items():
+                        # 残数マップに残っているエントリをrBOM_ONLYとして追加
+                        # rbom_groupから元のデータを取得
+                        rbom_row_data = rbom_group[
+                            (rbom_group['order_no'] == rbom_order_no_str) &
+                            (rbom_group['line_no'] == rbom_line_no_int)
+                        ]
+
+                        if not rbom_row_data.empty:
+                            rbom_row = rbom_row_data.iloc[0]
+                            rbom_original_idx = rbom_row['rbom_original_idx']
+
+                            # 既存の連番を確認してrBOM連番を取得
+                            existing_rbom_sequences = [r.get('rbom_m_sequence') for r in mapping_results
+                                                      if r.get('rbom_order_no') == rbom_order_no_str
+                                                      and r.get('rbom_line_no') == rbom_line_no_int
+                                                      and r.get('rbom_m_sequence') is not None]
+                            rbom_sequence = max(existing_rbom_sequences) + 1 if existing_rbom_sequences else 1
+
+                            # rBOM_ONLY行を作成
+                            rbom_series = pd.Series({
+                                'order_no': rbom_order_no_str,
+                                'line_no': rbom_line_no_int,
+                                'item_code': rbom_row['item_code'],
+                                'item_name': rbom_row['item_name'],
+                                'order_quantity': rbom_remaining_qty,
+                                'delivery_date': rbom_row['delivery_date'],
+                                'seino': rbom_row['seino']
+                            })
+
+                            result = self._create_mapping_result(None, rbom_series, '自動', rbom_m_sequence=rbom_sequence)
+                            mapping_results.append(result)
+                            rbom_matched.add(rbom_original_idx)
+                            logger.debug(f"  rBOM残数出力: rBOM({rbom_order_no_str}+{rbom_line_no_int}, 連番{rbom_sequence}) - 残数{rbom_remaining_qty}")
+
                 else:
                     # 差分処理無効時：1対1の通常マッピング
                     min_count = min(len(ej_group), len(rbom_group))

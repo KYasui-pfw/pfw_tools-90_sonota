@@ -12,6 +12,8 @@ from ui.components import render_main_grid
 import os
 import logging
 from pathlib import Path
+import zipfile
+import shutil
 
 # デバッグログ設定
 log_dir = Path("./logs")
@@ -87,6 +89,43 @@ st.markdown("""
                     }        
 </style>
 """, unsafe_allow_html=True)
+
+def backup_database():
+    """
+    データベースをバックアップする
+
+    Returns:
+        bool: バックアップが成功した場合True、失敗した場合False
+    """
+    try:
+        # データベースファイルのパス
+        db_path = Path("./database/mapping.db")
+
+        # データベースファイルが存在しない場合はバックアップ不要
+        if not db_path.exists():
+            logger.info("データベースファイルが存在しないため、バックアップをスキップします。")
+            return True
+
+        # バックアップディレクトリの作成
+        backup_dir = Path("./database/DB_backup")
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        # タイムスタンプ付きのファイル名を生成
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        backup_filename = f"{timestamp}_mapping.db.zip"
+        backup_path = backup_dir / backup_filename
+
+        # zipファイルに圧縮
+        logger.info(f"データベースバックアップ開始: {backup_filename}")
+        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(db_path, arcname="mapping.db")
+
+        logger.info(f"データベースバックアップ完了: {backup_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"データベースバックアップ中にエラーが発生しました: {str(e)}", exc_info=True)
+        return False
 
 def _ensure_and_prepare_data(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -268,6 +307,18 @@ def render_mapping_list_page():
             logger.info("自動マッピング処理開始")
             logger.info(f"納期範囲: {start_date} 〜 {end_date}")
             print(f"[DEBUG] 確認完了 - 実際の処理を開始")
+
+            # データベースバックアップ（処理開始前）
+            logger.info("【ステップ0】データベースバックアップ開始")
+            backup_start_time = datetime.now()
+            backup_success = backup_database()
+            backup_elapsed = (datetime.now() - backup_start_time).total_seconds()
+
+            if not backup_success:
+                st.warning("データベースのバックアップに失敗しましたが、処理を続行します。")
+                logger.warning(f"データベースバックアップ失敗 ({backup_elapsed:.2f}秒)")
+            else:
+                logger.info(f"データベースバックアップ完了 ({backup_elapsed:.2f}秒)")
 
             # 確認後の実際の処理
             with st.spinner("データを取得中..."):

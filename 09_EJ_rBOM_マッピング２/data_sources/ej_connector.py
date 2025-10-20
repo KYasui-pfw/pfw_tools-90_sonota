@@ -1,7 +1,7 @@
 """
 EJシステム接続モジュール
 """
-import cx_Oracle
+import oracledb
 import pandas as pd
 from datetime import datetime, date
 from typing import List, Dict
@@ -16,25 +16,38 @@ logger = logging.getLogger(__name__)
 
 class EJConnector:
     """EJシステム（Oracle Database）接続クラス"""
-    
+
+    # クラス変数でthick mode初期化フラグを管理
+    _thick_mode_initialized = False
+
     def __init__(self):
         """初期化"""
+        # thick modeの初期化（初回のみ実行）
+        if not EJConnector._thick_mode_initialized:
+            try:
+                oracledb.init_oracle_client()
+                EJConnector._thick_mode_initialized = True
+                logger.info("oracledb thick mode初期化完了")
+            except Exception as e:
+                # 既に初期化済みの場合はエラーを無視
+                logger.debug(f"oracledb thick mode初期化スキップ: {str(e)}")
+
         # データベース接続情報（環境変数または固定値）
         self.host = os.getenv('EJ_DB_HOST', '172.17.107.102')
         self.port = os.getenv('EJ_DB_PORT', '1521')
         self.service_name = os.getenv('EJ_DB_SERVICE', 'EXPJ')
         self.username = os.getenv('EJ_DB_USER', 'EXPJ2')
         self.password = os.getenv('EJ_DB_PASSWORD', 'EXPJ2')
-        
+
         # 接続文字列
         self.connection_string = f"{self.username}/{self.password}@{self.host}:{self.port}/{self.service_name}"
     
     def get_connection(self):
         """データベース接続を取得"""
         try:
-            connection = cx_Oracle.connect(self.connection_string)
+            connection = oracledb.connect(self.connection_string)
             return connection
-        except cx_Oracle.DatabaseError as e:
+        except oracledb.DatabaseError as e:
             raise Exception(f"EJシステムへの接続に失敗しました: {str(e)}")
     
     def get_order_backlog(self, start_date: date, end_date: date) -> List[Dict]:
@@ -140,8 +153,8 @@ class EJConnector:
                 logger.info(f"EJデータ取得完了: {len(results)}件 (合計: {(datetime.now() - query_start).total_seconds():.3f}秒)")
 
                 return results
-                
-        except cx_Oracle.DatabaseError as e:
+
+        except oracledb.DatabaseError as e:
             raise Exception(f"EJシステムからのデータ取得に失敗しました: {str(e)}")
         except Exception as e:
             raise Exception(f"予期しないエラーが発生しました: {str(e)}")
