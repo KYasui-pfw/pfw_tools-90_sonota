@@ -353,6 +353,18 @@ class MappingEngine:
                                                     if r.get('ej_order_no') == ej_order_no and r.get('ej_m_sequence') is not None]
                             ej_sequence = max(existing_ej_sequences) + 1 if existing_ej_sequences else 1
 
+                            # デバッグログ追加
+                            if ej_order_no == 'E8857378':
+                                logger.info(f"[連番DEBUG] EJ発注番号={ej_order_no}")
+                                logger.info(f"[連番DEBUG] mapping_results総数={len(mapping_results)}")
+                                logger.info(f"[連番DEBUG] 同じEJ発注番号のエントリ数={len([r for r in mapping_results if r.get('ej_order_no') == ej_order_no])}")
+                                logger.info(f"[連番DEBUG] existing_ej_sequences={existing_ej_sequences}")
+                                logger.info(f"[連番DEBUG] 決定した連番={ej_sequence}")
+                                # mapping_resultsの最初の10件をサンプル出力
+                                logger.info(f"[連番DEBUG] mapping_resultsサンプル（最初10件）:")
+                                for i, r in enumerate(mapping_results[:10]):
+                                    logger.info(f"  [{i}] ej_order_no={r.get('ej_order_no')}, ej_m_sequence={r.get('ej_m_sequence')}, is_manual={r.get('is_manual_mapping')}")
+
                             # EJ残数量を複数rBOM行に順次割り当て
 
                             while ej_remaining > 0 and rbom_idx < len(rbom_group):
@@ -397,6 +409,11 @@ class MappingEngine:
                                                               and r.get('rbom_line_no') == rbom_line_no_int
                                                               and r.get('rbom_m_sequence') is not None]
                                     rbom_sequence = max(existing_rbom_sequences) + 1 if existing_rbom_sequences else 1
+
+                                    # デバッグログ追加（rBOM側）
+                                    logger.debug(f"[rBOM連番DEBUG] rBOM発注番号+行番号={rbom_order_no_str}+{rbom_line_no_int}")
+                                    logger.debug(f"[rBOM連番DEBUG] existing_rbom_sequences={existing_rbom_sequences}")
+                                    logger.debug(f"[rBOM連番DEBUG] 決定した連番={rbom_sequence}")
 
                                     # マッピング数量を決定（min(EJ残数, rBOM数量)）
                                     mapping_qty = min(ej_remaining, rbom_qty_num)
@@ -601,8 +618,15 @@ class MappingEngine:
             # to_dict('records')でリスト化して一括処理
             for ej_record in ej_only_df.to_dict('records'):
                 ej_series = pd.Series(ej_record)
+
+                # 既存の連番を確認（手動マッピングや自動マッピングで使用済みの連番を引き継ぐ）
+                ej_order_no = ej_series.get('order_no')
+                existing_ej_sequences = [r.get('ej_m_sequence') for r in mapping_results
+                                        if r.get('ej_order_no') == ej_order_no and r.get('ej_m_sequence') is not None]
+                ej_sequence = max(existing_ej_sequences) + 1 if existing_ej_sequences else 1
+
                 result = self._create_mapping_result(
-                    ej_series, None, '自動'  # EJ_ONLYも「自動」として表示
+                    ej_series, None, '自動', ej_m_sequence=ej_sequence  # EJ_ONLYも「自動」として表示
                 )
                 mapping_results.append(result)
                 ej_only_count += 1
