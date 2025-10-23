@@ -207,3 +207,14 @@ marimo/_lsp/
 __marimo__/
 
 nul
+# SQLite database files (project-specific)
+*.db
+database/mapping.db
+database/DB_backup/
+
+# Temporary batch files
+*_start.bat
+
+# Temporary image files
+err*.png
+test*.png
