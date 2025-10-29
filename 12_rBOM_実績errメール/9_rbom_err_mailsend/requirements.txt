@@ -1,0 +1,14 @@
+# requirements.txt
+# Python依存パッケージ
+
+# 環境変数管理
+python-dotenv==1.0.0
+
+# HTTP通信
+requests==2.31.0
+
+# Streamlit（管理画面用）
+streamlit==1.39.0
+
+# データベース（SQLiteは標準ライブラリ）
+# なし

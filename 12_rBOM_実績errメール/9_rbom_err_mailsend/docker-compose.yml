@@ -1,0 +1,37 @@
+# docker-compose.yml
+
+services:
+  # エラー監視・メール送信サービス
+  monitor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.monitor
+    container_name: rbom_error_monitor
+    env_file:
+      - .env
+    volumes:
+      - ./db:/app/db
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - app-shared-net
+
+  # Streamlit管理画面サービス
+  rbom_mailsend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.streamlit
+    container_name: rbom_admin_ui
+    env_file:
+      - .env
+    ports:
+      - "8507:8507"
+    volumes:
+      - ./db:/app/db
+    restart: unless-stopped
+    networks:
+      - app-shared-net
+
+networks:
+  app-shared-net:
+    external: true

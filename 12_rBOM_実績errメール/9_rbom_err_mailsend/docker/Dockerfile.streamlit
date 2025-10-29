@@ -1,0 +1,29 @@
+# docker/Dockerfile.streamlit
+# Streamlit管理画面用Dockerイメージ
+
+FROM python:3.12-slim
+
+# タイムゾーンを日本に設定
+ENV TZ=Asia/Tokyo
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# 作業ディレクトリを設定
+WORKDIR /app
+
+# 依存パッケージをインストール
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションコードをコピー
+COPY app/ ./app/
+COPY streamlit_app/ ./streamlit_app/
+COPY scripts/ ./scripts/
+
+# データベース初期化スクリプトを実行可能にする
+RUN chmod +x /app/scripts/init_db.py
+
+# Streamlitのポート公開
+EXPOSE 8507
+
+# 起動時にDB初期化してからStreamlitを起動
+CMD python /app/scripts/init_db.py && streamlit run streamlit_app/main.py --server.port=8507 --server.address=0.0.0.0
