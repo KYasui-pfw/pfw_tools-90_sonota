@@ -117,7 +117,7 @@ class MailSender:
         hmnm = record_info.get("hmnm", "-")
 
         body = f"""
-rBOMシステムから実績登録エラーの通知です。
+rBOMへの実績登録時に登録エラーを検知しました。
 
 以下のデータでエラーが発生しています。
 ご確認をお願いいたします。
