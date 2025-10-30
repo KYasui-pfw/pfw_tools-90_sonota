@@ -120,7 +120,7 @@ with tab1:
         # 社員選択と社員情報を横並びで表示
         employee_options = {f"{emp['tancd']} - {emp['tannm']}": emp['tancd'] for emp in employees}
         # 初期値用に空の選択肢を追加
-        employee_options_with_default = {"（社員を選択してください）": None}
+        employee_options_with_default = {"": None}
         employee_options_with_default.update(employee_options)
 
         col1, col_space, col2, col3, col4 = st.columns([2, 1, 1, 1, 1])
