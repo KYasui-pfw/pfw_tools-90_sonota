@@ -256,38 +256,42 @@ with tab1:
 
 # ========== タブ2: メール送信履歴 ==========
 with tab2:
-    st.header("メール送信履歴")
+    st.header("メール送信履歴（30日分）")
 
-    # 表示件数選択
-    limit = st.selectbox("表示件数", [50, 100, 200, 500], index=1)
-
-    histories = db.get_mail_history(limit=limit)
+    histories = db.get_mail_history(days=30)
 
     if not histories:
-        st.info("送信履歴はありません")
+        st.info("送信履歴はありません（30日以内）")
     else:
-        st.write(f"**送信履歴: {len(histories)}件（最新{limit}件）**")
+        st.write(f"**送信履歴: {len(histories)}件（過去30日分）**")
 
-        # テーブル形式で表示
-        for history in histories:
-            with st.container():
-                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 3, 3])
+        # pandasデータフレーム用にカラム名を整形
+        import pandas as pd
 
-                with col1:
-                    st.write(history['sent_at'])
-                with col2:
-                    st.write(f"**{history['table_name']}**")
-                with col3:
-                    st.write(history['record_id'])
-                with col4:
-                    st.write(f"{history['employee_code']}")
-                with col5:
-                    st.write(history['email_address'])
+        df_data = []
+        for h in histories:
+            df_data.append({
+                "送信日時": h.get('sent_at', '-'),
+                "機能": h.get('function_name', '-'),
+                "発注/引当番号": h.get('order_no', '-'),
+                "行番号": h.get('line_no', '-'),
+                "リスト番号": h.get('listno', '-'),
+                "品目コード": h.get('hmcd', '-'),
+                "品目名": h.get('hmnm', '-'),
+                "登録日時": h.get('instdt', '-'),
+                "社員コード": h.get('employee_code', '-'),
+                "社員名": h.get('employee_name', '-'),
+                "送信先": h.get('email_addresses', '-'),
+                "テーブル": h.get('table_name', '-')
+            })
 
-                # エラー詳細を展開可能にする
-                if history['error_detail']:
-                    with st.expander("エラー詳細を表示"):
-                        st.code(history['error_detail'], language=None)
+        df = pd.DataFrame(df_data)
 
-                st.markdown("---")
+        # データフレームを表示（幅を最大化）
+        st.dataframe(
+            df,
+            use_container_width=True,
+            height=600,
+            hide_index=True
+        )
 

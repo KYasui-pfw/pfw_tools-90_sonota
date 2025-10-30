@@ -146,12 +146,27 @@ class ErrorMonitor:
 
         if not to_addresses and not cc_addresses:
             logger.warning(f"[{table_name}] レコードID {record_id}: 社員コード {employee_code} のメール送信先が設定されていません")
+
+            # エラー詳細を作成（送信先未設定の場合もレコード情報は取得）
+            function_name = "受入機能" if function_type == "acceptance" else "棚出機能"
+            record_info = self._extract_record_info(table_name, record, record_id, employee_code, employee_name)
+
             # 送信先未設定でも履歴に記録（再送信を防ぐため）
             self.db_manager.add_mail_history(
                 table_name=table_name,
                 record_id=record_id,
                 employee_code=employee_code,
-                email_address="（送信先未設定）",
+                employee_name=employee_name,
+                to_addresses=["（送信先未設定）"],
+                cc_addresses=[],
+                function_name=function_name,
+                order_no=record_info.get('order_no', '-'),
+                order_label=record_info.get('order_label', '番号'),
+                line_no=record_info.get('line_no', '-'),
+                listno=record_info.get('listno', '-'),
+                hmcd=record_info.get('hmcd', '-'),
+                hmnm=record_info.get('hmnm', '-'),
+                instdt=record_info.get('instdt', '-'),
                 error_detail="メール送信先が設定されていないため送信スキップ"
             )
             logger.info(f"[{table_name}] レコードID {record_id}: 送信先未設定として履歴を記録しました")
@@ -172,18 +187,26 @@ class ErrorMonitor:
 
         # メール送信
         if self.mail_sender.send_error_notification(to_addresses, cc_addresses, employee_name, error_data):
-            # 送信履歴を記録（TO/CC全員分）
-            all_recipients = to_addresses + cc_addresses
+            # 送信履歴を記録（1エラーにつき1レコード）
             error_detail_summary = f"{function_name} - {record_info.get('order_no', '-')} / {record_info.get('line_no', '-')}"
-            for email_address in all_recipients:
-                self.db_manager.add_mail_history(
-                    table_name=table_name,
-                    record_id=record_id,
-                    employee_code=employee_code,
-                    email_address=email_address,
-                    error_detail=error_detail_summary
-                )
-            logger.info(f"[{table_name}] レコードID {record_id}: メール送信完了、履歴を記録しました")
+            self.db_manager.add_mail_history(
+                table_name=table_name,
+                record_id=record_id,
+                employee_code=employee_code,
+                employee_name=employee_name,
+                to_addresses=to_addresses,
+                cc_addresses=cc_addresses,
+                function_name=function_name,
+                order_no=record_info.get('order_no', '-'),
+                order_label=record_info.get('order_label', '番号'),
+                line_no=record_info.get('line_no', '-'),
+                listno=record_info.get('listno', '-'),
+                hmcd=record_info.get('hmcd', '-'),
+                hmnm=record_info.get('hmnm', '-'),
+                instdt=record_info.get('instdt', '-'),
+                error_detail=error_detail_summary
+            )
+            logger.info(f"[{table_name}] レコードID {record_id}: メール送信完了（TO={len(to_addresses)}件, CC={len(cc_addresses)}件）、履歴を記録しました")
         else:
             logger.error(f"[{table_name}] レコードID {record_id}: メール送信に失敗しました")
 

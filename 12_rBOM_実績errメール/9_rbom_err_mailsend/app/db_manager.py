@@ -265,19 +265,52 @@ class DatabaseManager:
         return result["count"] > 0
 
     def add_mail_history(self, table_name: str, record_id: str, employee_code: str,
-                        email_address: str, error_detail: str = None) -> int:
-        """メール送信履歴を追加"""
+                        to_addresses: List[str] = None, cc_addresses: List[str] = None,
+                        error_detail: str = None,
+                        employee_name: str = None, function_name: str = None,
+                        order_no: str = None, order_label: str = None,
+                        line_no: str = None, listno: str = None,
+                        hmcd: str = None, hmnm: str = None, instdt: str = None) -> int:
+        """
+        メール送信履歴を追加（1エラーにつき1レコード）
+
+        Args:
+            table_name: テーブル名
+            record_id: レコードID
+            employee_code: 社員コード
+            to_addresses: TOメールアドレスのリスト
+            cc_addresses: CCメールアドレスのリスト
+            その他: エラー詳細情報
+
+        Returns:
+            履歴ID（成功時）、-1（重複時）
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
             # 日本時間で現在時刻を取得
             jst_now = datetime.now(ZoneInfo('Asia/Tokyo')).strftime('%Y-%m-%d %H:%M:%S')
 
+            # TO/CCを1つの文字列にまとめる形式: "to:email1, email2, cc:email3, email4"
+            parts = []
+            if to_addresses and len(to_addresses) > 0:
+                to_str = ", ".join(to_addresses)
+                parts.append(f"to:{to_str}")
+            if cc_addresses and len(cc_addresses) > 0:
+                cc_str = ", ".join(cc_addresses)
+                parts.append(f"cc:{cc_str}")
+
+            email_addresses_str = ", ".join(parts) if parts else ""
+
             cursor.execute("""
                 INSERT INTO mail_send_history
-                (table_name, record_id, employee_code, email_address, error_detail, sent_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (table_name, record_id, employee_code, email_address, error_detail, jst_now))
+                (table_name, record_id, employee_code, employee_name, email_addresses,
+                 function_name, order_no, order_label, line_no, listno, hmcd, hmnm, instdt,
+                 error_detail, sent_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (table_name, record_id, employee_code, employee_name, email_addresses_str,
+                  function_name, order_no, order_label, line_no, listno, hmcd, hmnm, instdt,
+                  error_detail, jst_now))
             conn.commit()
             history_id = cursor.lastrowid
             conn.close()
@@ -287,17 +320,26 @@ class DatabaseManager:
             conn.close()
             return -1
 
-    def get_mail_history(self, limit: int = 100) -> List[Dict]:
-        """メール送信履歴を取得（最新順）"""
+    def get_mail_history(self, days: int = 30) -> List[Dict]:
+        """
+        メール送信履歴を取得（最新順、デフォルト30日分）
+
+        Args:
+            days: 取得する日数（デフォルト30日）
+
+        Returns:
+            送信履歴のリスト
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, table_name, record_id, employee_code, email_address,
+            SELECT id, table_name, record_id, employee_code, employee_name, email_addresses,
+                   function_name, order_no, order_label, line_no, listno, hmcd, hmnm, instdt,
                    error_detail, sent_at
             FROM mail_send_history
+            WHERE sent_at >= datetime('now', '-' || ? || ' days', 'localtime')
             ORDER BY sent_at DESC
-            LIMIT ?
-        """, (limit,))
+        """, (days,))
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
