@@ -119,140 +119,152 @@ with tab1:
     else:
         # 社員選択と社員情報を横並びで表示
         employee_options = {f"{emp['tancd']} - {emp['tannm']}": emp['tancd'] for emp in employees}
+        # 初期値用に空の選択肢を追加
+        employee_options_with_default = {"（社員を選択してください）": None}
+        employee_options_with_default.update(employee_options)
 
         col1, col_space, col2, col3, col4 = st.columns([2, 1, 1, 1, 1])
         with col1:
-            selected_label = st.selectbox("送信先を設定する社員を選択", list(employee_options.keys()))
+            selected_label = st.selectbox(
+                "送信先を設定する社員を選択（入力で検索可能）",
+                list(employee_options_with_default.keys()),
+                index=0  # 初期値を空欄に
+            )
 
-        selected_tancd = employee_options[selected_label]
-        employee = db.get_employee_by_tancd(selected_tancd)
+        selected_tancd = employee_options_with_default[selected_label]
 
-        with col2:
-            st.markdown("**社員コード**")
-            st.write(employee['tancd'])
-        with col3:
-            st.markdown("**社員名**")
-            st.write(employee['tannm'])
-        with col4:
-            st.markdown("**ステータス**")
-            status = "✅ 有効" if employee['valflg'] == '1' else "❌ 無効"
-            st.write(status)
+        # 社員が選択されている場合のみ以降を表示
+        if selected_tancd is None:
+            st.info("👆 社員を選択してください")
+        else:
+            employee = db.get_employee_by_tancd(selected_tancd)
 
-        #st.markdown("---")
+            with col2:
+                st.markdown("**社員コード**")
+                st.write(employee['tancd'])
+            with col3:
+                st.markdown("**社員名**")
+                st.write(employee['tannm'])
+            with col4:
+                st.markdown("**ステータス**")
+                status = "✅ 有効" if employee['valflg'] == '1' else "❌ 無効"
+                st.write(status)
 
-        # 現在の設定を取得
-        current_recipients = db.get_all_recipients_by_tancd(selected_tancd)
+            #st.markdown("---")
 
-        # 受入機能と棚出機能をタブで切り替え
-        func_tab1, func_tab2 = st.tabs(["受入機能", "棚出機能"])
+            # 現在の設定を取得
+            current_recipients = db.get_all_recipients_by_tancd(selected_tancd)
 
-        # ========== 受入機能タブ ==========
-        with func_tab1:
-            with st.form(f"acceptance_form_{selected_tancd}"):
-                st.write("**受入TO（宛先）**")
-                acceptance_to = []
+            # 受入機能と棚出機能をタブで切り替え
+            func_tab1, func_tab2 = st.tabs(["受入機能", "棚出機能"])
 
-                # TO 1行目（3個）
-                col1, col2, col3 = st.columns(3)
-                for i, col in enumerate([col1, col2, col3]):
-                    with col:
-                        default_val = current_recipients["acceptance"]["TO"][i] if i < len(current_recipients["acceptance"]["TO"]) else ""
-                        email = st.text_input(f"TO {i+1}", value=default_val, key=f"acc_to_{i}", max_chars=255, label_visibility="visible")
-                        acceptance_to.append(email)
+            # ========== 受入機能タブ ==========
+            with func_tab1:
+                with st.form(f"acceptance_form_{selected_tancd}"):
+                    st.write("**受入TO（宛先）**")
+                    acceptance_to = []
 
-                # TO 2行目（2個）
-                col1, col2, col3 = st.columns(3)
-                for i, col in enumerate([col1, col2], start=3):
-                    with col:
-                        default_val = current_recipients["acceptance"]["TO"][i] if i < len(current_recipients["acceptance"]["TO"]) else ""
-                        email = st.text_input(f"TO {i+1}", value=default_val, key=f"acc_to_{i}", max_chars=255, label_visibility="visible")
-                        acceptance_to.append(email)
+                    # TO 1行目（3個）
+                    col1, col2, col3 = st.columns(3)
+                    for i, col in enumerate([col1, col2, col3]):
+                        with col:
+                            default_val = current_recipients["acceptance"]["TO"][i] if i < len(current_recipients["acceptance"]["TO"]) else ""
+                            email = st.text_input(f"TO {i+1}", value=default_val, key=f"acc_to_{i}", max_chars=255, label_visibility="visible")
+                            acceptance_to.append(email)
 
-                st.write("**受入CC（CC）**")
-                acceptance_cc = []
+                    # TO 2行目（2個）
+                    col1, col2, col3 = st.columns(3)
+                    for i, col in enumerate([col1, col2], start=3):
+                        with col:
+                            default_val = current_recipients["acceptance"]["TO"][i] if i < len(current_recipients["acceptance"]["TO"]) else ""
+                            email = st.text_input(f"TO {i+1}", value=default_val, key=f"acc_to_{i}", max_chars=255, label_visibility="visible")
+                            acceptance_to.append(email)
 
-                # CC 1行目（3個）
-                col1, col2, col3 = st.columns(3)
-                for i, col in enumerate([col1, col2, col3]):
-                    with col:
-                        default_val = current_recipients["acceptance"]["CC"][i] if i < len(current_recipients["acceptance"]["CC"]) else ""
-                        email = st.text_input(f"CC {i+1}", value=default_val, key=f"acc_cc_{i}", max_chars=255, label_visibility="visible")
-                        acceptance_cc.append(email)
+                    st.write("**受入CC（CC）**")
+                    acceptance_cc = []
 
-                # CC 2行目（2個）+ 保存ボタン
-                col1, col2, col3 = st.columns(3)
-                for i, col in enumerate([col1, col2], start=3):
-                    with col:
-                        default_val = current_recipients["acceptance"]["CC"][i] if i < len(current_recipients["acceptance"]["CC"]) else ""
-                        email = st.text_input(f"CC {i+1}", value=default_val, key=f"acc_cc_{i}", max_chars=255, label_visibility="visible")
-                        acceptance_cc.append(email)
+                    # CC 1行目（3個）
+                    col1, col2, col3 = st.columns(3)
+                    for i, col in enumerate([col1, col2, col3]):
+                        with col:
+                            default_val = current_recipients["acceptance"]["CC"][i] if i < len(current_recipients["acceptance"]["CC"]) else ""
+                            email = st.text_input(f"CC {i+1}", value=default_val, key=f"acc_cc_{i}", max_chars=255, label_visibility="visible")
+                            acceptance_cc.append(email)
 
-                with col3:
-                    st.write("")  # ラベル分の空白
-                    submitted_acceptance = st.form_submit_button("受入設定を保存", type="primary")
+                    # CC 2行目（2個）+ 保存ボタン
+                    col1, col2, col3 = st.columns(3)
+                    for i, col in enumerate([col1, col2], start=3):
+                        with col:
+                            default_val = current_recipients["acceptance"]["CC"][i] if i < len(current_recipients["acceptance"]["CC"]) else ""
+                            email = st.text_input(f"CC {i+1}", value=default_val, key=f"acc_cc_{i}", max_chars=255, label_visibility="visible")
+                            acceptance_cc.append(email)
 
-                if submitted_acceptance:
-                    try:
-                        db.bulk_update_recipients(selected_tancd, "acceptance", "TO", acceptance_to)
-                        db.bulk_update_recipients(selected_tancd, "acceptance", "CC", acceptance_cc)
-                        st.success("受入機能の設定を保存しました")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"保存に失敗しました: {e}")
+                    with col3:
+                        st.write("")  # ラベル分の空白
+                        submitted_acceptance = st.form_submit_button("受入設定を保存", type="primary")
 
-        # ========== 棚出機能タブ ==========
-        with func_tab2:
-            with st.form(f"picking_form_{selected_tancd}"):
-                st.write("**棚出TO（宛先）**")
-                picking_to = []
+                    if submitted_acceptance:
+                        try:
+                            db.bulk_update_recipients(selected_tancd, "acceptance", "TO", acceptance_to)
+                            db.bulk_update_recipients(selected_tancd, "acceptance", "CC", acceptance_cc)
+                            st.success("受入機能の設定を保存しました")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"保存に失敗しました: {e}")
 
-                # TO 1行目（3個）
-                col1, col2, col3 = st.columns(3)
-                for i, col in enumerate([col1, col2, col3]):
-                    with col:
-                        default_val = current_recipients["picking"]["TO"][i] if i < len(current_recipients["picking"]["TO"]) else ""
-                        email = st.text_input(f"TO {i+1}", value=default_val, key=f"pick_to_{i}", max_chars=255, label_visibility="visible")
-                        picking_to.append(email)
+            # ========== 棚出機能タブ ==========
+            with func_tab2:
+                with st.form(f"picking_form_{selected_tancd}"):
+                    st.write("**棚出TO（宛先）**")
+                    picking_to = []
 
-                # TO 2行目（2個）
-                col1, col2, col3 = st.columns(3)
-                for i, col in enumerate([col1, col2], start=3):
-                    with col:
-                        default_val = current_recipients["picking"]["TO"][i] if i < len(current_recipients["picking"]["TO"]) else ""
-                        email = st.text_input(f"TO {i+1}", value=default_val, key=f"pick_to_{i}", max_chars=255, label_visibility="visible")
-                        picking_to.append(email)
+                    # TO 1行目（3個）
+                    col1, col2, col3 = st.columns(3)
+                    for i, col in enumerate([col1, col2, col3]):
+                        with col:
+                            default_val = current_recipients["picking"]["TO"][i] if i < len(current_recipients["picking"]["TO"]) else ""
+                            email = st.text_input(f"TO {i+1}", value=default_val, key=f"pick_to_{i}", max_chars=255, label_visibility="visible")
+                            picking_to.append(email)
 
-                st.write("**棚出CC（CC）**")
-                picking_cc = []
+                    # TO 2行目（2個）
+                    col1, col2, col3 = st.columns(3)
+                    for i, col in enumerate([col1, col2], start=3):
+                        with col:
+                            default_val = current_recipients["picking"]["TO"][i] if i < len(current_recipients["picking"]["TO"]) else ""
+                            email = st.text_input(f"TO {i+1}", value=default_val, key=f"pick_to_{i}", max_chars=255, label_visibility="visible")
+                            picking_to.append(email)
 
-                # CC 1行目（3個）
-                col1, col2, col3 = st.columns(3)
-                for i, col in enumerate([col1, col2, col3]):
-                    with col:
-                        default_val = current_recipients["picking"]["CC"][i] if i < len(current_recipients["picking"]["CC"]) else ""
-                        email = st.text_input(f"CC {i+1}", value=default_val, key=f"pick_cc_{i}", max_chars=255, label_visibility="visible")
-                        picking_cc.append(email)
+                    st.write("**棚出CC（CC）**")
+                    picking_cc = []
 
-                # CC 2行目（2個）+ 保存ボタン
-                col1, col2, col3 = st.columns(3)
-                for i, col in enumerate([col1, col2], start=3):
-                    with col:
-                        default_val = current_recipients["picking"]["CC"][i] if i < len(current_recipients["picking"]["CC"]) else ""
-                        email = st.text_input(f"CC {i+1}", value=default_val, key=f"pick_cc_{i}", max_chars=255, label_visibility="visible")
-                        picking_cc.append(email)
+                    # CC 1行目（3個）
+                    col1, col2, col3 = st.columns(3)
+                    for i, col in enumerate([col1, col2, col3]):
+                        with col:
+                            default_val = current_recipients["picking"]["CC"][i] if i < len(current_recipients["picking"]["CC"]) else ""
+                            email = st.text_input(f"CC {i+1}", value=default_val, key=f"pick_cc_{i}", max_chars=255, label_visibility="visible")
+                            picking_cc.append(email)
 
-                with col3:
-                    st.write("")  # ラベル分の空白
-                    submitted_picking = st.form_submit_button("棚出設定を保存", type="primary")
+                    # CC 2行目（2個）+ 保存ボタン
+                    col1, col2, col3 = st.columns(3)
+                    for i, col in enumerate([col1, col2], start=3):
+                        with col:
+                            default_val = current_recipients["picking"]["CC"][i] if i < len(current_recipients["picking"]["CC"]) else ""
+                            email = st.text_input(f"CC {i+1}", value=default_val, key=f"pick_cc_{i}", max_chars=255, label_visibility="visible")
+                            picking_cc.append(email)
 
-                if submitted_picking:
-                    try:
-                        db.bulk_update_recipients(selected_tancd, "picking", "TO", picking_to)
-                        db.bulk_update_recipients(selected_tancd, "picking", "CC", picking_cc)
-                        st.success("棚出機能の設定を保存しました")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"保存に失敗しました: {e}")
+                    with col3:
+                        st.write("")  # ラベル分の空白
+                        submitted_picking = st.form_submit_button("棚出設定を保存", type="primary")
+
+                    if submitted_picking:
+                        try:
+                            db.bulk_update_recipients(selected_tancd, "picking", "TO", picking_to)
+                            db.bulk_update_recipients(selected_tancd, "picking", "CC", picking_cc)
+                            st.success("棚出機能の設定を保存しました")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"保存に失敗しました: {e}")
 
 # ========== タブ2: メール送信履歴 ==========
 with tab2:
