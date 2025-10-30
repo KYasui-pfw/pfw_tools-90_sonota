@@ -205,6 +205,17 @@ def render_mapping_list_page():
             help="チェックすると、EJ数とrBOM数の差分を連番を増やして追加します"
         )
 
+    # データベース初期化と前回実行時刻の読み込み（表示前に実行）
+    if 'db_manager' not in st.session_state:
+        st.session_state.db_manager = DatabaseManager()
+        st.session_state.db_manager.initialize_database()
+
+        # 最終実行時刻を取得（データベースまたはバックアップから）
+        last_time = st.session_state.db_manager.get_last_execution_time()
+        if last_time:
+            st.session_state.last_mapping_time = last_time
+            logger.info(f"前回実行時刻を復元: {last_time}")
+
     with col4:
         st.write("")  # スペース調整
         auto_mapping_btn = st.button("自動マッピング", type="primary")
@@ -218,16 +229,6 @@ def render_mapping_list_page():
         else:
             st.caption("前回実行:")
             st.caption("なし")
-    
-    if 'db_manager' not in st.session_state:
-        st.session_state.db_manager = DatabaseManager()
-        st.session_state.db_manager.initialize_database()
-
-        # 最終実行時刻を取得（データベースまたはバックアップから）
-        last_time = st.session_state.db_manager.get_last_execution_time()
-        if last_time:
-            st.session_state.last_mapping_time = last_time
-            logger.info(f"前回実行時刻を復元: {last_time}")
     
     if auto_mapping_btn:
         print(f"[DEBUG] 自動マッピングボタンがクリックされました")
