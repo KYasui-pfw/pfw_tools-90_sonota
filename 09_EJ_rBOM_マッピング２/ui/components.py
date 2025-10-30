@@ -26,6 +26,11 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
 
     # 結果列を作成（手動/自動/未マッピングの判定）
     def determine_result(row):
+        # statusフィールドを優先チェック（"済2"などの特殊ステータス）
+        status = row.get('status')
+        if pd.notna(status) and status != '':
+            return status  # statusが設定されている場合はそのまま返す（"済2"など）
+
         # is_manual_mappingフラグをチェック（Trueまたは1の場合）
         manual_flag = row.get('is_manual_mapping')
 
@@ -38,7 +43,7 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
             determine_result.debug_count = 1
 
         if determine_result.debug_count <= 10:
-            logger.debug(f"[結果判定] ej_order_no={row.get('ej_order_no')}, rbom_order_no={row.get('rbom_order_no')}, is_manual_mapping={manual_flag} (型: {type(manual_flag)})")
+            logger.debug(f"[結果判定] ej_order_no={row.get('ej_order_no')}, rbom_order_no={row.get('rbom_order_no')}, status={status}, is_manual_mapping={manual_flag} (型: {type(manual_flag)})")
 
         # SQLiteはBOOLEANを0/1として保存するため、1またはTrueをチェック
         if pd.notna(manual_flag) and manual_flag in [True, 1, '1', 1.0]:
@@ -102,6 +107,9 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
     if 'ej_delivery_date' in data.columns:
         column_order.append('ej_delivery_date')
         display_columns['ej_delivery_date'] = 'EJ納期'
+    if 'ej_vend_cd' in data.columns:
+        column_order.append('ej_vend_cd')
+        display_columns['ej_vend_cd'] = 'EJ仕入先コード'
     
     # rBOMグループ
     if 'rbom_order_line' in data.columns:
@@ -122,7 +130,16 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
     if 'rbom_delivery_date' in data.columns:
         column_order.append('rbom_delivery_date')
         display_columns['rbom_delivery_date'] = 'rBOM納期'
-    
+    if 'rbom_ktcd' in data.columns:
+        column_order.append('rbom_ktcd')
+        display_columns['rbom_ktcd'] = 'rBOM工程コード'
+    if 'rbom_srcd' in data.columns:
+        column_order.append('rbom_srcd')
+        display_columns['rbom_srcd'] = 'rBOM仕入先コード'
+    if 'mk020_note' in data.columns:
+        column_order.append('mk020_note')
+        display_columns['mk020_note'] = 'rBOM備考'
+
     # データをソート：品目コード→EJ発注番号→EJ連番→rBOM発注番号+行番号→rBOM連番の順
     sort_columns = []
 
@@ -212,6 +229,9 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
             if 'ej_delivery_date' in data.columns:
                 csv_column_order.append('ej_delivery_date')
                 csv_display_columns['ej_delivery_date'] = 'EJ納期'
+            if 'ej_vend_cd' in data.columns:
+                csv_column_order.append('ej_vend_cd')
+                csv_display_columns['ej_vend_cd'] = 'EJ仕入先コード'
 
             # rBOMグループ（全項目を含む）
             if 'rbom_order_line' in data.columns:
@@ -232,6 +252,15 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
             if 'rbom_delivery_date' in data.columns:
                 csv_column_order.append('rbom_delivery_date')
                 csv_display_columns['rbom_delivery_date'] = 'rBOM納期'
+            if 'rbom_ktcd' in data.columns:
+                csv_column_order.append('rbom_ktcd')
+                csv_display_columns['rbom_ktcd'] = 'rBOM工程コード'
+            if 'rbom_srcd' in data.columns:
+                csv_column_order.append('rbom_srcd')
+                csv_display_columns['rbom_srcd'] = 'rBOM仕入先コード'
+            if 'mk020_note' in data.columns:
+                csv_column_order.append('mk020_note')
+                csv_display_columns['mk020_note'] = 'rBOM備考'
 
             # CSV用データを準備
             csv_data_reordered = data[csv_column_order]

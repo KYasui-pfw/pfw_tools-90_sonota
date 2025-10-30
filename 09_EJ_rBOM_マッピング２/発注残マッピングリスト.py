@@ -7,6 +7,7 @@ from datetime import datetime, date
 from database.db_manager import DatabaseManager
 from data_sources.ej_connector import EJConnector
 from data_sources.rbom_connector import RBOMConnector
+from data_sources.mk020_connector import MK020Connector
 from mapping.mapper import MappingEngine
 from ui.components import render_main_grid
 import os
@@ -174,7 +175,7 @@ def render_mapping_list_page():
     end_date = date(2027, 1, 31)
 
     # 納期許容日数の入力と自動マッピングボタン
-    col1, col2, col3, col4 = st.columns([2, 2, 1, 2])
+    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1.5])
 
     with col1:
         ej_after_rbom_days = st.number_input(
@@ -207,10 +208,26 @@ def render_mapping_list_page():
     with col4:
         st.write("")  # スペース調整
         auto_mapping_btn = st.button("自動マッピング", type="primary")
+
+    with col5:
+        # 前回実行時刻を2段表示
+        if 'last_mapping_time' in st.session_state:
+            last_time = st.session_state.last_mapping_time
+            st.caption("前回実行:")
+            st.caption(last_time.strftime('%Y-%m-%d %H:%M:%S'))
+        else:
+            st.caption("前回実行:")
+            st.caption("なし")
     
     if 'db_manager' not in st.session_state:
         st.session_state.db_manager = DatabaseManager()
         st.session_state.db_manager.initialize_database()
+
+        # 最終実行時刻を取得（データベースまたはバックアップから）
+        last_time = st.session_state.db_manager.get_last_execution_time()
+        if last_time:
+            st.session_state.last_mapping_time = last_time
+            logger.info(f"前回実行時刻を復元: {last_time}")
     
     if auto_mapping_btn:
         print(f"[DEBUG] 自動マッピングボタンがクリックされました")
@@ -355,8 +372,16 @@ def render_mapping_list_page():
                     elapsed = (datetime.now() - start_time).total_seconds()
                     logger.info(f"固定マッピング取得完了: {len(fixed_mappings)}件 ({elapsed:.2f}秒)")
 
-                    # 5. マッピング実行
-                    logger.info("【ステップ5】マッピング実行開始")
+                    # 5. MK020マスタ取得
+                    logger.info("【ステップ5】MK020マスタ取得開始")
+                    start_time = datetime.now()
+                    mk020_connector = MK020Connector()
+                    mk020_data = mk020_connector.get_mk020_data()
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    logger.info(f"MK020マスタ取得完了: {len(mk020_data)}件 ({elapsed:.2f}秒)")
+
+                    # 6. マッピング実行
+                    logger.info("【ステップ6】マッピング実行開始")
                     start_time = datetime.now()
                     mapper = MappingEngine()
                     mapping_result = mapper.execute_mapping(
@@ -366,7 +391,8 @@ def render_mapping_list_page():
                         fixed_mappings=fixed_mappings,
                         ej_after_rbom_days=ej_after_rbom_days,
                         ej_before_rbom_days=ej_before_rbom_days,
-                        enable_quantity_diff=enable_quantity_diff
+                        enable_quantity_diff=enable_quantity_diff,
+                        mk020_data=mk020_data
                     )
                     # マッピング結果と統計情報を展開
                     mapping_results = mapping_result['mapping_results']
@@ -414,6 +440,12 @@ def render_mapping_list_page():
                     st.session_state.db_manager.save_mapping_results(mapping_results)
                     elapsed = (datetime.now() - start_time).total_seconds()
                     logger.info(f"結果保存完了 ({elapsed:.2f}秒)")
+
+                    # 前回実行時刻を記録（セッションとデータベースの両方）
+                    execution_time = datetime.now()
+                    st.session_state.last_mapping_time = execution_time
+                    st.session_state.db_manager.save_last_execution_time(execution_time)
+                    logger.info(f"前回実行時刻を記録: {execution_time}")
 
                     logger.info("自動マッピング処理完了")
                     logger.info("=" * 80)

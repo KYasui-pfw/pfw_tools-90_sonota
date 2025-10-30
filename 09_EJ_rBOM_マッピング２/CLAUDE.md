@@ -55,10 +55,13 @@ The application implements a simplified mapping system with two persistence laye
 ### Core Components
 
 - **`発注残マッピングリスト.py`**: Main Streamlit application with simplified UI
-- **`data_sources/`**: External system connectors (EJConnector for Oracle, RBOMConnector for API)
-- **`mapping/mapper.py`**: Simplified mapping engine with fixed mapping exclusion logic only
-- **`database/db_manager.py`**: SQLite operations managing two tables
-- **`ui/components.py`**: Interactive data grid using st.data_editor with checkbox controls
+- **`data_sources/`**: External system connectors
+  - `ej_connector.py`: Oracle DB connector for EJ legacy system
+  - `rbom_connector.py`: REST API connector for rBOM system
+  - `mk020_connector.py`: Generic Query API connector for MK020 master data (vendor/process notes)
+- **`mapping/mapper.py`**: Simplified mapping engine with fixed mapping exclusion logic and MK020 LEFT JOIN
+- **`database/db_manager.py`**: SQLite operations managing two tables with schema migration support
+- **`ui/components.py`**: Interactive data grid using st.dataframe with CSV export
 
 ### Two-Table Database Design (Simplified)
 
@@ -75,13 +78,18 @@ The application implements a simplified mapping system with two persistence laye
 **Removed from this version:**
 - manual_mappings table (not needed in simplified version)
 
-### Simplified Mapping Logic
+### Enhanced Mapping Logic
 
 The mapping engine processes data in this sequence:
-1. **Exclusion Phase**: Remove fixed mapping keys from source EJ/rBOM data
-2. **Re-injection Phase**: Add fixed mappings (type='自動', fixed=true)
-3. **Auto-mapping Phase**: Standard item_code + quantity matching on remaining data
-4. **Classification**: Results categorized as MATCHED, EJ_ONLY, RBOM_ONLY
+1. **MK020 Enrichment Phase**: LEFT JOIN rBOM data with MK020 master
+   - Filter: `VALQTY = 0`
+   - Sort: Latest `VALDTF` (有効日付From) per (OYAHMCD, KTCD, SRCD) group
+   - Join: `rBOM.item_code = MK020.oyahmcd AND rBOM.ktcd = MK020.ktcd AND rBOM.srcd = MK020.srcd`
+   - Result: MK020 NOTE appended to rBOM data as `mk020_note`
+2. **Exclusion Phase**: Remove fixed mapping keys from source EJ/rBOM data
+3. **Re-injection Phase**: Add fixed mappings (type='自動', fixed=true) with preserved mk020_note
+4. **Auto-mapping Phase**: Standard item_code + quantity matching on remaining data
+5. **Classification**: Results categorized as MATCHED, EJ_ONLY, RBOM_ONLY
 
 ### Key Business Rules
 
@@ -93,10 +101,22 @@ The mapping engine processes data in this sequence:
 
 ## Important Implementation Details
 
-### Database Schema (Simplified)
-The system uses a two-table approach:
-- **mapping_results**: 20 fields including EJ data (7), rBOM data (7), management (3), system (3)
-- **fixed_mappings**: 18 fields, stores user-selected mappings for preservation
+### Database Schema (Enhanced)
+The system uses a two-table approach with recent enhancements:
+
+**mapping_results table** (25 fields total):
+- **EJ data** (9 fields): order_no, item_code, item_name, quantity, status, purch_odr_typ, delivery_date, **vend_cd (仕入先コード)**, **m_sequence**
+- **rBOM data** (10 fields): order_no, line_no, item_code, item_name, quantity, delivery_date, seino, **ktcd (工程コード)**, **srcd (仕入先コード)**, **m_sequence**
+- **MK020 data** (1 field): **mk020_note (備考)** - LEFT JOIN from MK020 master where VALQTY=0 and latest VALDTF
+- **Management** (3 fields): status, mapping_type, is_fixed
+- **System** (2 fields): created_at, updated_at
+
+**fixed_mappings table**: Same structure as mapping_results, stores user-locked mappings
+
+**Key Schema Features**:
+- Automatic schema migration via ALTER TABLE for backward compatibility
+- All new fields (ej_vend_cd, rbom_ktcd, rbom_srcd, mk020_note) nullable for existing data
+- Database initialization on first run creates schema, subsequent runs use migration
 
 ### Interactive UI Architecture
 
@@ -104,25 +124,82 @@ The system uses a two-table approach:
 - **Controls**: Auto-mapping button + Fixed operation controls (マッピング確定情報更新 | 全選択 | 全解除)
 
 **Data Grid Features**:
-- Uses `st.data_editor` for interactive checkbox controls
-- Only 'マッピング確定' column is editable, all others disabled
+- Uses `st.dataframe` for read-only display with high performance
+- Display columns include vendor codes (EJ/rBOM), process code (rBOM), and notes (rBOM)
 - All mappings are type '自動' (automatic)
 - rBOM displays combined "発注番号+行番号" format (9+3 digits with '+' separator)
+- Fixed mapping checkbox controls via separate interface
 
 ### UI Conventions
 - **CSS Styling**: Compressed header and clean layout
-- **Column Display Order**: EJ発注番号→EJ連番→EJ品目コード... then rBOM発注番号+行番号→rBOM連番→rBOM品目コード...
+- **Column Display Order**:
+  - EJ: 発注番号→連番→品目コード→品目名→数→納期→**仕入先コード**
+  - rBOM: 発注番号+行番号→連番→品目コード→品目名→数→納期→**工程コード→仕入先コード→備考**
 - **Index Hiding**: Always use `hide_index=True` for dataframe displays
-- **Japanese Labels**: All UI text in Japanese
+- **Japanese Labels**: All UI text in Japanese with full kanji terms (e.g., "仕入先コード" not "仕入先CD")
 
 ### Session Management
 - DatabaseManager stored in `st.session_state` for persistence across interactions
 - Database initialization happens once per session on first access
 - Interactive state managed through streamlit rerun cycles for checkbox changes
 
+## Critical Implementation Patterns
+
+### Database Operations (CRITICAL)
+When modifying database schema or operations, always update **THREE** places in `db_manager.py`:
+
+1. **CREATE TABLE schema** (lines 52-91 for mapping_results, 95-127 for fixed_mappings)
+   - Add new column with proper type and comment
+   - Example: `ej_vend_cd TEXT,  -- EJ仕入先コード (T_RLSD_PUCH_ODR.VEND_CD)`
+
+2. **Migration logic** (lines 168-229)
+   - Add try/except block to ALTER TABLE for each new column
+   - Pattern:
+   ```python
+   try:
+       cursor.execute("SELECT new_column FROM table_name LIMIT 1")
+   except sqlite3.OperationalError:
+       logger.info("table_nameテーブルにnew_columnカラムを追加")
+       cursor.execute("ALTER TABLE table_name ADD COLUMN new_column TYPE")
+   ```
+
+3. **INSERT/SELECT statements**
+   - `save_mapping_results()`: INSERT statement (lines 395-429)
+   - `save_fixed_mapping()`: INSERT statement (lines 475-505)
+   - `get_mapping_results()`: SELECT statement (lines 442-453)
+   - Must include ALL columns in proper order with matching placeholders
+
+**Common Bug**: Forgetting to update INSERT/SELECT statements causes columns to not save/display even if schema exists.
+
+### MK020 Master Integration Pattern
+The MK020 LEFT JOIN enrichment follows strict filtering rules:
+
+```python
+# 1. Filter VALQTY = 0
+mk020_filtered = mk020_df[mk020_df['valqty'] == 0].copy()
+
+# 2. Convert VALDTF to datetime
+mk020_filtered['valdtf_dt'] = pd.to_datetime(mk020_filtered['valdtf'], errors='coerce')
+
+# 3. Get latest VALDTF per group
+mk020_latest = mk020_filtered.sort_values('valdtf_dt', ascending=False).groupby(
+    ['oyahmcd', 'ktcd', 'srcd'], dropna=False
+).first().reset_index()
+
+# 4. LEFT JOIN with rBOM
+rbom_df = rbom_df.merge(
+    mk020_latest[['oyahmcd', 'ktcd', 'srcd', 'note']],
+    left_on=['item_code', 'ktcd', 'srcd'],
+    right_on=['oyahmcd', 'ktcd', 'srcd'],
+    how='left'
+)
+```
+
+**Critical**: This pattern ensures only valid (VALQTY=0) and current (latest VALDTF) master data is used.
+
 ## Configuration Requirements
 
-### API Authentication (Critical)
+### API Authentication (CRITICAL)
 ```python
 # rBOM API requires X-API-KEY header (not Bearer token)
 headers = {
@@ -168,9 +245,10 @@ RBOM_API_TOKEN=oG5^Ls%#20yq
 - Kill Python processes: `wmic process where "name='python.exe'" delete`
 
 ### Database Schema Updates
-- Simplified two-table schema requires database recreation
-- Delete `./Database/mapping.db` to force recreation with new schema
-- Schema auto-initializes on first application startup
+- Schema migration is automatic via ALTER TABLE pattern (no recreation needed)
+- If migration fails, delete `./Database/mapping.db` to force full schema recreation
+- Always test with existing database to verify backward compatibility
+- Migration logs appear in application logs during startup
 
 ### API Authentication Failures
 - rBOM API uses `X-API-KEY` header, not Bearer tokens

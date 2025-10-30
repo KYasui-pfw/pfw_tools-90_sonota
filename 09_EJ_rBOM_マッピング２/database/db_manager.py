@@ -62,6 +62,7 @@ class DatabaseManager:
                     ej_status TEXT,                 -- EJステータス (T_RLSD_PUCH_ODR.PUCH_ODR_STS_TYP)
                     ej_purch_odr_typ TEXT,          -- EJ発注種別 (T_RLSD_PUCH_ODR.PUCH_ODR_TYP)
                     ej_delivery_date DATE,          -- EJ納期 (T_RLSD_PUCH_ODR.PUCH_ODR_DLV_DATE)
+                    ej_vend_cd TEXT,                -- EJ仕入先コード (T_RLSD_PUCH_ODR.VEND_CD)
 
                     -- rBOM側データ
                     rbom_order_no TEXT,             -- rBOM発注番号
@@ -71,6 +72,9 @@ class DatabaseManager:
                     rbom_quantity REAL,             -- rBOM数量
                     rbom_delivery_date DATE,        -- rBOM納期
                     rbom_seino TEXT,                -- rBOM製番
+                    rbom_ktcd TEXT,                 -- rBOM工程コード
+                    rbom_srcd TEXT,                 -- rBOM仕入先コード
+                    mk020_note TEXT,                -- MK020備考 (MK020.NOTE)
 
                     -- マッピング管理項目
                     ej_m_sequence INTEGER DEFAULT 1,    -- EJ連番（固定値1）
@@ -99,6 +103,7 @@ class DatabaseManager:
                     ej_status TEXT,                 -- EJステータス
                     ej_purch_odr_typ TEXT,          -- EJ発注種別
                     ej_delivery_date DATE,          -- EJ納期
+                    ej_vend_cd TEXT,                -- EJ仕入先コード
                     
                     -- rBOM側データ
                     rbom_order_no TEXT,             -- rBOM発注番号
@@ -108,7 +113,10 @@ class DatabaseManager:
                     rbom_quantity REAL,             -- rBOM数量
                     rbom_delivery_date DATE,        -- rBOM納期
                     rbom_seino TEXT,                -- rBOM製番
-                    
+                    rbom_ktcd TEXT,                 -- rBOM工程コード
+                    rbom_srcd TEXT,                 -- rBOM仕入先コード
+                    mk020_note TEXT,                -- MK020備考 (MK020.NOTE)
+
                     -- マッピング管理項目
                     ej_m_sequence INTEGER DEFAULT 1,    -- EJ連番（固定値1）
                     rbom_m_sequence INTEGER DEFAULT 1,  -- rBOM連番（固定値1）
@@ -159,15 +167,170 @@ class DatabaseManager:
 
             # fixed_mappings用
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_fixed_ej_order 
+                CREATE INDEX IF NOT EXISTS idx_fixed_ej_order
                 ON fixed_mappings(ej_order_no)
             """)
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_fixed_rbom_order 
+                CREATE INDEX IF NOT EXISTS idx_fixed_rbom_order
                 ON fixed_mappings(rbom_order_no, rbom_line_no)
             """)
+
+            # 既存テーブルにej_vend_cdカラムを追加（カラムが存在しない場合のみ）
+            try:
+                cursor.execute("SELECT ej_vend_cd FROM mapping_results LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("mapping_resultsテーブルにej_vend_cdカラムを追加")
+                cursor.execute("ALTER TABLE mapping_results ADD COLUMN ej_vend_cd TEXT")
+
+            try:
+                cursor.execute("SELECT ej_vend_cd FROM fixed_mappings LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("fixed_mappingsテーブルにej_vend_cdカラムを追加")
+                cursor.execute("ALTER TABLE fixed_mappings ADD COLUMN ej_vend_cd TEXT")
+
+            # 既存テーブルにrbom_ktcdカラムを追加（カラムが存在しない場合のみ）
+            try:
+                cursor.execute("SELECT rbom_ktcd FROM mapping_results LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("mapping_resultsテーブルにrbom_ktcdカラムを追加")
+                cursor.execute("ALTER TABLE mapping_results ADD COLUMN rbom_ktcd TEXT")
+
+            try:
+                cursor.execute("SELECT rbom_ktcd FROM fixed_mappings LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("fixed_mappingsテーブルにrbom_ktcdカラムを追加")
+                cursor.execute("ALTER TABLE fixed_mappings ADD COLUMN rbom_ktcd TEXT")
+
+            # 既存テーブルにrbom_srcdカラムを追加（カラムが存在しない場合のみ）
+            try:
+                cursor.execute("SELECT rbom_srcd FROM mapping_results LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("mapping_resultsテーブルにrbom_srcdカラムを追加")
+                cursor.execute("ALTER TABLE mapping_results ADD COLUMN rbom_srcd TEXT")
+
+            try:
+                cursor.execute("SELECT rbom_srcd FROM fixed_mappings LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("fixed_mappingsテーブルにrbom_srcdカラムを追加")
+                cursor.execute("ALTER TABLE fixed_mappings ADD COLUMN rbom_srcd TEXT")
+
+            # 既存テーブルにmk020_noteカラムを追加（カラムが存在しない場合のみ）
+            try:
+                cursor.execute("SELECT mk020_note FROM mapping_results LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("mapping_resultsテーブルにmk020_noteカラムを追加")
+                cursor.execute("ALTER TABLE mapping_results ADD COLUMN mk020_note TEXT")
+
+            try:
+                cursor.execute("SELECT mk020_note FROM fixed_mappings LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("fixed_mappingsテーブルにmk020_noteカラムを追加")
+                cursor.execute("ALTER TABLE fixed_mappings ADD COLUMN mk020_note TEXT")
+
+            conn.commit()
+
+    def save_last_execution_time(self, execution_time: datetime):
+        """
+        最終実行時刻をデータベースに保存
+
+        Args:
+            execution_time: 実行時刻
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # system_settings テーブルが存在しない場合は作成
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS system_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 実行時刻を保存（既存レコードがあればUPDATE、なければINSERT）
+            cursor.execute("""
+                INSERT OR REPLACE INTO system_settings (key, value, updated_at)
+                VALUES ('last_execution_time', ?, CURRENT_TIMESTAMP)
+            """, (execution_time.strftime('%Y-%m-%d %H:%M:%S'),))
             
             conn.commit()
+            logger.info(f"最終実行時刻をデータベースに保存: {execution_time}")
+
+    def get_last_execution_time(self) -> datetime:
+        """
+        最終実行時刻をデータベースから取得
+        データベースに記録がない場合は、バックアップフォルダの最新ファイル時刻を返す
+
+        Returns:
+            最終実行時刻（取得できない場合はNone）
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # テーブル存在チェック
+                cursor.execute("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name='system_settings'
+                """)
+                
+                if cursor.fetchone() is None:
+                    logger.info("system_settingsテーブルが存在しないため、バックアップから取得します")
+                    return self._get_latest_backup_time()
+                
+                # 実行時刻を取得
+                cursor.execute("""
+                    SELECT value FROM system_settings 
+                    WHERE key = 'last_execution_time'
+                """)
+                
+                result = cursor.fetchone()
+                
+                if result is None:
+                    logger.info("データベースに実行時刻の記録がないため、バックアップから取得します")
+                    return self._get_latest_backup_time()
+                
+                # 文字列からdatetimeに変換
+                execution_time = datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S')
+                logger.info(f"データベースから最終実行時刻を取得: {execution_time}")
+                return execution_time
+                
+        except Exception as e:
+            logger.warning(f"最終実行時刻の取得に失敗（バックアップから取得します）: {str(e)}")
+            return self._get_latest_backup_time()
+
+    def _get_latest_backup_time(self) -> datetime:
+        """
+        バックアップフォルダから最新のバックアップファイルの作成時刻を取得
+
+        Returns:
+            最新バックアップの作成時刻（バックアップがない場合はNone）
+        """
+        try:
+            backup_dir = Path("./database/DB_backup")
+            
+            if not backup_dir.exists():
+                logger.info("バックアップディレクトリが存在しません")
+                return None
+            
+            # バックアップファイルを取得
+            backup_files = list(backup_dir.glob("*.db.zip"))
+            
+            if not backup_files:
+                logger.info("バックアップファイルが存在しません")
+                return None
+            
+            # 最新のファイルを取得（更新時刻順）
+            latest_backup = max(backup_files, key=lambda f: f.stat().st_mtime)
+            backup_time = datetime.fromtimestamp(latest_backup.stat().st_mtime)
+            
+            logger.info(f"最新バックアップから実行時刻を取得: {backup_time} (ファイル: {latest_backup.name})")
+            return backup_time
+            
+        except Exception as e:
+            logger.warning(f"バックアップファイルからの時刻取得に失敗: {str(e)}")
+            return None
     
     def clear_mapping_results(self):
         """既存のマッピング結果をクリア"""
@@ -229,14 +392,19 @@ class DatabaseManager:
                     if manual_count <= 3:  # 最初の3件だけログ出力
                         logger.debug(f"  [手動マッピング検出] ej_order_no={result.get('ej_order_no')}, is_manual_mapping={is_manual} (型: {type(is_manual)})")
 
+                status_value = result.get('status', '')
+                # 済2のデバッグログ（最初の3件のみ）
+                if status_value == '済2' and insert_count < 3:
+                    logger.info(f"【デバッグ】DB保存前 status='済2'検出: EJ={result.get('ej_order_no')}, rBOM={result.get('rbom_order_no')}+{result.get('rbom_line_no')}")
+
                 cursor.execute("""
                     INSERT INTO mapping_results (
                         item_code,
-                        ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date,
+                        ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date, ej_vend_cd,
                         rbom_order_no, rbom_line_no, rbom_item_code, rbom_item_name,
-                        rbom_quantity, rbom_delivery_date, rbom_seino,
+                        rbom_quantity, rbom_delivery_date, rbom_seino, rbom_ktcd, rbom_srcd, mk020_note,
                         ej_m_sequence, rbom_m_sequence, status, mapping_type, is_fixed, is_manual_mapping
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     result.get('item_code'),
                     result.get('ej_order_no'),
@@ -246,6 +414,7 @@ class DatabaseManager:
                     result.get('ej_status'),
                     result.get('ej_purch_odr_typ'),
                     result.get('ej_delivery_date'),
+                    result.get('ej_vend_cd'),
                     result.get('rbom_order_no'),
                     result.get('rbom_line_no'),
                     result.get('rbom_item_code'),
@@ -253,9 +422,12 @@ class DatabaseManager:
                     result.get('rbom_quantity'),
                     result.get('rbom_delivery_date'),
                     result.get('rbom_seino'),
+                    result.get('rbom_ktcd'),
+                    result.get('rbom_srcd'),
+                    result.get('mk020_note'),
                     ej_m_seq,  # mapper側で指定された連番、またはデフォルト
                     rbom_m_seq,  # mapper側で指定された連番、またはデフォルト
-                    '',  # status 空欄
+                    status_value,  # status（"済2"など、デフォルトは空欄）
                     result.get('mapping_type'),
                     result.get('is_fixed', False),  # is_fixed デフォルトFalse
                     result.get('is_manual_mapping', False)  # is_manual_mapping デフォルトFalse
@@ -271,7 +443,7 @@ class DatabaseManager:
     def get_mapping_results(self) -> pd.DataFrame:
         """
         マッピング結果を取得
-        
+
         Returns:
             マッピング結果のDataFrame
         """
@@ -279,8 +451,8 @@ class DatabaseManager:
             query = """
                 SELECT
                     item_code,
-                    ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date,
-                    rbom_order_no, rbom_line_no, rbom_item_code, rbom_item_name, rbom_quantity, rbom_delivery_date,
+                    ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date, ej_vend_cd,
+                    rbom_order_no, rbom_line_no, rbom_item_code, rbom_item_name, rbom_quantity, rbom_delivery_date, rbom_seino, rbom_ktcd, rbom_srcd, mk020_note,
                     ej_m_sequence, rbom_m_sequence, status, mapping_type, is_fixed, is_manual_mapping
                 FROM mapping_results
                 ORDER BY item_code, ej_order_no, rbom_order_no
@@ -307,11 +479,11 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO fixed_mappings (
-                    ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date,
+                    ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date, ej_vend_cd,
                     rbom_order_no, rbom_line_no, rbom_item_code, rbom_item_name,
-                    rbom_quantity, rbom_delivery_date, rbom_seino,
+                    rbom_quantity, rbom_delivery_date, rbom_seino, rbom_ktcd, rbom_srcd, mk020_note,
                     ej_m_sequence, rbom_m_sequence, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 clean_data.get('ej_order_no'),
                 clean_data.get('ej_item_code'),
@@ -320,6 +492,7 @@ class DatabaseManager:
                 clean_data.get('ej_status'),
                 clean_data.get('ej_purch_odr_typ'),
                 clean_data.get('ej_delivery_date'),
+                clean_data.get('ej_vend_cd'),
                 clean_data.get('rbom_order_no'),
                 clean_data.get('rbom_line_no'),
                 clean_data.get('rbom_item_code'),
@@ -327,6 +500,9 @@ class DatabaseManager:
                 clean_data.get('rbom_quantity'),
                 clean_data.get('rbom_delivery_date'),
                 clean_data.get('rbom_seino'),
+                clean_data.get('rbom_ktcd'),
+                clean_data.get('rbom_srcd'),
+                clean_data.get('mk020_note'),
                 ej_m_seq,  # EJ発注番号がNoneならNone、それ以外は1
                 rbom_m_seq,  # rBOM発注番号がNoneならNone、それ以外は1
                 ''  # status 空欄

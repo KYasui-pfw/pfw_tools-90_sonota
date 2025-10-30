@@ -19,7 +19,7 @@ class MappingEngine:
     def execute_mapping(self, ej_data: List[Dict], rbom_data: List[Dict], manual_mappings: List[Dict] = None,
                        fixed_mappings: List[Dict] = None,
                        ej_after_rbom_days: int = None, ej_before_rbom_days: int = None,
-                       enable_quantity_diff: bool = False) -> List[Dict]:
+                       enable_quantity_diff: bool = False, mk020_data: List[Dict] = None) -> List[Dict]:
         """
         マッピング処理を実行（手動マッピング優先 + 固定マッピング考慮版 + 納期条件 + 数量差分処理）
 
@@ -31,6 +31,7 @@ class MappingEngine:
             ej_after_rbom_days: EJ納期がrBOM納期より遅い許容日数（Noneの場合は制限なし）
             ej_before_rbom_days: EJ納期がrBOM納期より早い許容日数（Noneの場合は制限なし）
             enable_quantity_diff: 数量差分処理を有効にするか（Trueの場合、連番を増やして差分行を追加）
+            mk020_data: MK020マスタデータのリスト（rBOMデータとLEFT JOINしてNOTE取得）
 
         Returns:
             マッピング結果のリスト
@@ -45,7 +46,51 @@ class MappingEngine:
         rbom_df = pd.DataFrame(rbom_data) if rbom_data else pd.DataFrame()
         manual_df = pd.DataFrame(manual_mappings) if manual_mappings else pd.DataFrame()
         fixed_df = pd.DataFrame(fixed_mappings) if fixed_mappings else pd.DataFrame()
+
+        # 納期のdatetime変換を追加（フェーズ4、5の一時リストで使用するため）
+        if not ej_df.empty and 'delivery_date' in ej_df.columns:
+            ej_df['delivery_date_dt'] = pd.to_datetime(ej_df['delivery_date'], errors='coerce')
+        if not rbom_df.empty and 'delivery_date' in rbom_df.columns:
+            rbom_df['delivery_date_dt'] = pd.to_datetime(rbom_df['delivery_date'], errors='coerce')
+
         logger.debug(f"DataFrame変換完了 ({(datetime.now() - start_time).total_seconds():.3f}秒)")
+
+        # MK020データとrBOMデータをLEFT JOIN
+        if mk020_data and not rbom_df.empty:
+            mk020_df = pd.DataFrame(mk020_data)
+            logger.info(f"MK020マスタデータ: {len(mk020_df)}件")
+
+            # VALQTY=0のみにフィルタリング
+            merge_start = datetime.now()
+            mk020_filtered = mk020_df[mk020_df['valqty'] == 0].copy()
+            logger.info(f"MK020フィルタリング(VALQTY=0): {len(mk020_df)}件 → {len(mk020_filtered)}件")
+
+            if not mk020_filtered.empty:
+                # VALDTFを日付型に変換
+                mk020_filtered['valdtf_dt'] = pd.to_datetime(mk020_filtered['valdtf'], errors='coerce')
+
+                # 各キー（OYAHMCD, KTCD, SRCD）ごとに最新のVALDTFを持つレコードのみを抽出
+                mk020_latest = mk020_filtered.sort_values('valdtf_dt', ascending=False).groupby(
+                    ['oyahmcd', 'ktcd', 'srcd'], dropna=False
+                ).first().reset_index()
+                logger.info(f"MK020最新レコード抽出: {len(mk020_filtered)}件 → {len(mk020_latest)}件")
+
+                # LEFT JOIN実行: rbom.item_code = mk020.oyahmcd AND rbom.srcd = mk020.srcd AND rbom.ktcd = mk020.ktcd
+                rbom_df = rbom_df.merge(
+                    mk020_latest[['oyahmcd', 'ktcd', 'srcd', 'note']],
+                    left_on=['item_code', 'ktcd', 'srcd'],
+                    right_on=['oyahmcd', 'ktcd', 'srcd'],
+                    how='left'
+                )
+                # 重複カラムoyahmcdを削除
+                rbom_df = rbom_df.drop(columns=['oyahmcd'], errors='ignore')
+                # note列をmk020_noteに名前変更
+                rbom_df = rbom_df.rename(columns={'note': 'mk020_note'})
+                logger.info(f"rBOM-MK020マージ完了: {len(rbom_df)}件 ({(datetime.now() - merge_start).total_seconds():.3f}秒)")
+                logger.info(f"MK020 NOTE取得件数: {rbom_df['mk020_note'].notna().sum()}件")
+            else:
+                logger.warning("MK020データがVALQTY=0でフィルタリング後に0件になりました")
+                rbom_df['mk020_note'] = None
 
         # マッピング結果を格納するリスト
         mapping_results = []
@@ -605,56 +650,247 @@ class MappingEngine:
             logger.debug(f"  品目コード別マッピング完了 ({(datetime.now() - mapping_start).total_seconds():.3f}秒)")
             logger.info(f"自動マッピング完了: {match_count}件マッピング (合計: {(datetime.now() - start_time).total_seconds():.3f}秒)")
 
-        # 4. EJのみのデータ（マッピングしなかったEJデータ）- 「自動」として表示（ベクトル化）
-        ej_only_count = 0
+        # 【フェーズ4】EJ_ONLYを一時リストに保存（mapping_resultsには未追加）
+        ej_only_list = []
         if not ej_df.empty:
-            logger.info(f"【フェーズ4】EJ_ONLY処理開始")
+            logger.info(f"【フェーズ4】EJ_ONLY一時リスト作成開始")
             start_time = datetime.now()
 
             # 未マッピングのEJデータを一括抽出
             ej_only_df = ej_df[~ej_df.index.isin(ej_matched)]
-            logger.debug(f"  未マッピングEJデータ抽出: {len(ej_only_df)}件")
+            logger.info(f"  未マッピングEJデータ抽出: {len(ej_only_df)}件")
 
-            # to_dict('records')でリスト化して一括処理
-            for ej_record in ej_only_df.to_dict('records'):
-                ej_series = pd.Series(ej_record)
+            # 一時リストに保存（元のDataFrame indexも保持）
+            for idx, ej_record in ej_only_df.iterrows():
+                ej_only_list.append({
+                    'index': idx,  # 元のDataFrame index
+                    'data': ej_record
+                })
 
-                # 既存の連番を確認（手動マッピングや自動マッピングで使用済みの連番を引き継ぐ）
+            logger.info(f"EJ_ONLY一時リスト作成完了: {len(ej_only_list)}件 ({(datetime.now() - start_time).total_seconds():.3f}秒)")
+
+        # 【フェーズ5】rBOM_ONLYを一時リストに保存（mapping_resultsには未追加）
+        rbom_only_list = []
+        if not rbom_df.empty:
+            logger.info(f"【フェーズ5】rBOM_ONLY一時リスト作成開始")
+            start_time = datetime.now()
+
+            # 未マッピングのrBOMデータを一括抽出
+            rbom_only_df = rbom_df[~rbom_df.index.isin(rbom_matched)]
+            logger.info(f"  未マッピングrBOMデータ抽出: {len(rbom_only_df)}件")
+
+            # 一時リストに保存（元のDataFrame indexも保持）
+            for idx, rbom_record in rbom_only_df.iterrows():
+                # rBOMデータのバリデーション：order_noとline_noが有効な場合のみ追加
+                if pd.notna(rbom_record.get('order_no')) and pd.notna(rbom_record.get('line_no')):
+                    rbom_only_list.append({
+                        'index': idx,  # 元のDataFrame index
+                        'data': rbom_record
+                    })
+                else:
+                    logger.warning(f"rBOM_ONLYデータが無効（order_no={rbom_record.get('order_no')}, line_no={rbom_record.get('line_no')}）- スキップ")
+
+            logger.info(f"rBOM_ONLY一時リスト作成完了: {len(rbom_only_list)}件 ({(datetime.now() - start_time).total_seconds():.3f}秒)")
+
+        # 【フェーズ6】一時リストから備考マッピング → "済2" をmapping_resultsに追加
+        bikou_mapping_count = 0
+        bikou_matched_ej_indices = set()  # 備考マッピングで使用したEJのindex
+        bikou_matched_rbom_indices = set()  # 備考マッピングで使用したrBOMのindex
+
+        if ej_only_list and rbom_only_list:
+            logger.info(f"【フェーズ6】備考マッピング処理開始")
+            start_time = datetime.now()
+
+            # rBOMを備考でグループ化（備考が空でないもののみ）
+            rbom_by_note = {}
+            for rbom_item in rbom_only_list:
+                rbom_data = rbom_item['data']
+                note = rbom_data.get('mk020_note')
+                if pd.notna(note) and note != '':
+                    if note not in rbom_by_note:
+                        rbom_by_note[note] = []
+                    rbom_by_note[note].append(rbom_item)
+
+            logger.info(f"  備考グループ数: {len(rbom_by_note)}種類")
+
+            # EJの各品目コードについて処理
+            for ej_item in ej_only_list:
+                ej_data = ej_item['data']
+                ej_idx = ej_item['index']
+                ej_item_code = ej_data.get('item_code')
+
+                # 品目コードと完全一致する備考を持つrBOMグループを取得
+                if ej_item_code not in rbom_by_note:
+                    continue
+
+                rbom_group = rbom_by_note[ej_item_code]
+                logger.debug(f"  備考マッピング: 品目コード={ej_item_code}, EJ=1件, rBOM={len(rbom_group)}件")
+
+                ej_order_no = ej_data.get('order_no')
+                ej_qty = ej_data.get('quantity')
+
+                if pd.isna(ej_qty):
+                    continue
+
+                ej_remaining = float(ej_qty)
+
+                # 既存の連番を確認
+                existing_ej_sequences = [r.get('ej_m_sequence') for r in mapping_results
+                                        if r.get('ej_order_no') == ej_order_no and r.get('ej_m_sequence') is not None]
+                ej_sequence = max(existing_ej_sequences) + 1 if existing_ej_sequences else 1
+
+                # rBOMの各行に数量を割り当て
+                for rbom_item in rbom_group:
+                    if ej_remaining <= 0:
+                        break
+
+                    rbom_data = rbom_item['data']
+                    rbom_idx = rbom_item['index']
+
+                    # すでに使用済みのrBOMはスキップ
+                    if rbom_idx in bikou_matched_rbom_indices:
+                        continue
+
+                    # 納期条件チェック（1週目と同じロジック）
+                    ej_delivery_dt = ej_data.get('delivery_date_dt')
+                    rbom_delivery_dt = rbom_data.get('delivery_date_dt')
+
+                    # デバッグログ（最初の3件のみ）
+                    if bikou_mapping_count < 3:
+                        logger.info(f"【デバッグ】納期チェック: EJ={ej_data.get('order_no')}, EJ納期_dt={ej_delivery_dt}, rBOM={rbom_data.get('order_no')}+{rbom_data.get('line_no')}, rBOM納期_dt={rbom_delivery_dt}, EJ≧rBOM許容={ej_after_rbom_days}, EJ≦rBOM許容={ej_before_rbom_days}")
+
+                    delivery_date_ok = self._check_delivery_date_condition(
+                        ej_delivery_dt,
+                        rbom_delivery_dt,
+                        ej_after_rbom_days,
+                        ej_before_rbom_days
+                    )
+
+                    if bikou_mapping_count < 3:
+                        logger.info(f"【デバッグ】納期チェック結果: {delivery_date_ok}")
+
+                    if not delivery_date_ok:
+                        continue  # 納期条件を満たさない場合はスキップ
+
+                    rbom_order_no = rbom_data.get('order_no')
+                    rbom_line_no = rbom_data.get('line_no')
+                    rbom_qty = rbom_data.get('order_quantity')
+
+                    if pd.isna(rbom_qty):
+                        continue
+
+                    rbom_qty_num = float(rbom_qty)
+
+                    # 既存の連番を確認（rBOM側）
+                    existing_rbom_sequences = [r.get('rbom_m_sequence') for r in mapping_results
+                                              if r.get('rbom_order_no') == rbom_order_no
+                                              and r.get('rbom_line_no') == rbom_line_no
+                                              and r.get('rbom_m_sequence') is not None]
+                    rbom_sequence = max(existing_rbom_sequences) + 1 if existing_rbom_sequences else 1
+
+                    # マッピング数量を決定
+                    mapping_qty = min(ej_remaining, rbom_qty_num)
+
+                    # マッピング結果を作成（ステータス"済2"）
+                    ej_series = pd.Series({
+                        'order_no': ej_order_no,
+                        'item_code': ej_data.get('item_code'),
+                        'item_name': ej_data.get('item_name'),
+                        'quantity': mapping_qty,
+                        'status': ej_data.get('status'),
+                        'purch_odr_typ': ej_data.get('purch_odr_typ'),
+                        'delivery_date': ej_data.get('delivery_date'),
+                        'vend_cd': ej_data.get('vend_cd')
+                    })
+
+                    rbom_series = pd.Series({
+                        'order_no': rbom_order_no,
+                        'line_no': rbom_line_no,
+                        'item_code': rbom_data.get('item_code'),
+                        'item_name': rbom_data.get('item_name'),
+                        'order_quantity': mapping_qty,
+                        'delivery_date': rbom_data.get('delivery_date'),
+                        'seino': rbom_data.get('seino'),
+                        'ktcd': rbom_data.get('ktcd'),
+                        'srcd': rbom_data.get('srcd'),
+                        'mk020_note': rbom_data.get('mk020_note')
+                    })
+
+                    result = self._create_mapping_result(ej_series, rbom_series, '自動',
+                                                         ej_m_sequence=ej_sequence,
+                                                         rbom_m_sequence=rbom_sequence)
+                    result['status'] = '済2'  # 備考マッピングは"済2"
+                    logger.info(f"【デバッグ】備考マッピング結果作成: status={result.get('status')}, EJ={ej_data.get('order_no')}, rBOM={rbom_data.get('order_no')}+{rbom_data.get('line_no')}")
+                    mapping_results.append(result)
+                    bikou_mapping_count += 1
+
+                    logger.debug(f"    備考マッピング成立: EJ={ej_order_no}(連番{ej_sequence}) ↔ rBOM={rbom_order_no}+{rbom_line_no}(連番{rbom_sequence}), 数量={mapping_qty}, 備考={rbom_data.get('mk020_note')}")
+
+                    # 残数を更新
+                    ej_remaining -= mapping_qty
+
+                    # rBOMを使用済みとしてマーク
+                    bikou_matched_rbom_indices.add(rbom_idx)
+
+                    # EJ連番をインクリメント
+                    ej_sequence += 1
+
+                # EJデータを使用済みとしてマーク（一部でもマッチングした場合）
+                if ej_remaining < float(ej_qty):
+                    bikou_matched_ej_indices.add(ej_idx)
+
+            logger.info(f"備考マッピング完了: {bikou_mapping_count}件 ({(datetime.now() - start_time).total_seconds():.3f}秒)")
+
+        # 【フェーズ7】一時リストの残り（マッチしなかったEJ） → "未" をmapping_resultsに追加
+        ej_only_count = 0
+        if ej_only_list:
+            logger.info(f"【フェーズ7】EJ_ONLY追加処理開始")
+            start_time = datetime.now()
+
+            for ej_item in ej_only_list:
+                ej_idx = ej_item['index']
+                ej_data = ej_item['data']
+
+                # 備考マッピングで使用済みのEJはスキップ
+                if ej_idx in bikou_matched_ej_indices:
+                    continue
+
+                ej_series = pd.Series(ej_data)
+
+                # 既存の連番を確認
                 ej_order_no = ej_series.get('order_no')
                 existing_ej_sequences = [r.get('ej_m_sequence') for r in mapping_results
                                         if r.get('ej_order_no') == ej_order_no and r.get('ej_m_sequence') is not None]
                 ej_sequence = max(existing_ej_sequences) + 1 if existing_ej_sequences else 1
 
                 result = self._create_mapping_result(
-                    ej_series, None, '自動', ej_m_sequence=ej_sequence  # EJ_ONLYも「自動」として表示
+                    ej_series, None, '自動', ej_m_sequence=ej_sequence
                 )
                 mapping_results.append(result)
                 ej_only_count += 1
 
             logger.info(f"EJ_ONLY追加完了: {ej_only_count}件 ({(datetime.now() - start_time).total_seconds():.3f}秒)")
 
-        # 5. rBOMのみのデータ（マッピングしなかったrBOMデータ）- 「自動」として表示（ベクトル化）
+        # 【フェーズ8】一時リストの残り（マッチしなかったrBOM） → "未" をmapping_resultsに追加
         rbom_only_count = 0
-        if not rbom_df.empty:
-            logger.info(f"【フェーズ5】rBOM_ONLY処理開始")
+        if rbom_only_list:
+            logger.info(f"【フェーズ8】rBOM_ONLY追加処理開始")
             start_time = datetime.now()
 
-            # 未マッピングのrBOMデータを一括抽出
-            rbom_only_df = rbom_df[~rbom_df.index.isin(rbom_matched)]
-            logger.debug(f"  未マッピングrBOMデータ抽出: {len(rbom_only_df)}件")
+            for rbom_item in rbom_only_list:
+                rbom_idx = rbom_item['index']
+                rbom_data = rbom_item['data']
 
-            # to_dict('records')でリスト化して一括処理
-            for rbom_record in rbom_only_df.to_dict('records'):
-                # rBOMデータのバリデーション：order_noとline_noが有効な場合のみ追加
-                if pd.notna(rbom_record.get('order_no')) and pd.notna(rbom_record.get('line_no')):
-                    rbom_series = pd.Series(rbom_record)
-                    result = self._create_mapping_result(
-                        None, rbom_series, '自動'  # rBOM_ONLYも「自動」として表示
-                    )
-                    mapping_results.append(result)
-                    rbom_only_count += 1
-                else:
-                    logger.warning(f"rBOM_ONLYデータが無効（order_no={rbom_record.get('order_no')}, line_no={rbom_record.get('line_no')}）- スキップ")
+                # 備考マッピングで使用済みのrBOMはスキップ
+                if rbom_idx in bikou_matched_rbom_indices:
+                    continue
+
+                rbom_series = pd.Series(rbom_data)
+                result = self._create_mapping_result(
+                    None, rbom_series, '自動'
+                )
+                mapping_results.append(result)
+                rbom_only_count += 1
 
             logger.info(f"rBOM_ONLY追加完了: {rbom_only_count}件 ({(datetime.now() - start_time).total_seconds():.3f}秒)")
 
@@ -714,7 +950,8 @@ class MappingEngine:
                 'ej_quantity': ej_row.get('quantity'),
                 'ej_status': ej_row.get('status'),
                 'ej_purch_odr_typ': ej_row.get('purch_odr_typ'),
-                'ej_delivery_date': ej_row.get('delivery_date')
+                'ej_delivery_date': ej_row.get('delivery_date'),
+                'ej_vend_cd': ej_row.get('vend_cd')
             })
         else:
             # EJ側データがない場合は空値
@@ -725,7 +962,8 @@ class MappingEngine:
                 'ej_quantity': None,
                 'ej_status': None,
                 'ej_purch_odr_typ': None,
-                'ej_delivery_date': None
+                'ej_delivery_date': None,
+                'ej_vend_cd': None
             })
 
         # rBOM側データ
@@ -737,7 +975,10 @@ class MappingEngine:
                 'rbom_item_name': rbom_row.get('item_name'),
                 'rbom_quantity': rbom_row.get('order_quantity'),
                 'rbom_delivery_date': rbom_row.get('delivery_date'),
-                'rbom_seino': rbom_row.get('seino')
+                'rbom_seino': rbom_row.get('seino'),
+                'rbom_ktcd': rbom_row.get('ktcd'),
+                'rbom_srcd': rbom_row.get('srcd'),
+                'mk020_note': rbom_row.get('mk020_note')
             })
         else:
             # rBOM側データがない場合は空値
@@ -748,7 +989,10 @@ class MappingEngine:
                 'rbom_item_name': None,
                 'rbom_quantity': None,
                 'rbom_delivery_date': None,
-                'rbom_seino': None
+                'rbom_seino': None,
+                'rbom_ktcd': None,
+                'rbom_srcd': None,
+                'mk020_note': None
             })
 
         return result
@@ -780,6 +1024,7 @@ class MappingEngine:
             'ej_status': fixed_row.get('ej_status'),
             'ej_purch_odr_typ': fixed_row.get('ej_purch_odr_typ'),
             'ej_delivery_date': fixed_row.get('ej_delivery_date'),
+            'ej_vend_cd': fixed_row.get('ej_vend_cd'),
             'rbom_order_no': fixed_row.get('rbom_order_no'),
             'rbom_line_no': fixed_row.get('rbom_line_no'),
             'rbom_item_code': fixed_row.get('rbom_item_code'),
@@ -787,6 +1032,9 @@ class MappingEngine:
             'rbom_quantity': fixed_row.get('rbom_quantity'),
             'rbom_delivery_date': fixed_row.get('rbom_delivery_date'),
             'rbom_seino': fixed_row.get('rbom_seino'),
+            'rbom_ktcd': fixed_row.get('rbom_ktcd'),
+            'rbom_srcd': fixed_row.get('rbom_srcd'),
+            'mk020_note': fixed_row.get('mk020_note'),
             'mapping_type': mapping_type,
             'is_fixed': True  # 固定マッピングは常に固定
         }

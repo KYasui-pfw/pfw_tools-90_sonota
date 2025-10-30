@@ -98,7 +98,8 @@ class EJConnector:
                 t.PUCH_ODR_QTY as quantity,
                 t.PUCH_ODR_STS_TYP as status,
                 t.PUCH_ODR_TYP as purch_odr_typ,
-                t.PUCH_ODR_DLV_DATE as delivery_date
+                t.PUCH_ODR_DLV_DATE as delivery_date,
+                t.VEND_CD as vend_cd
             FROM EXPJ2.T_RLSD_PUCH_ODR t
             LEFT JOIN EXPJ2.M_ITEM m ON t.ITEM_CD = m.ITEM_CD
             WHERE t.PUCH_ODR_STS_TYP = 2

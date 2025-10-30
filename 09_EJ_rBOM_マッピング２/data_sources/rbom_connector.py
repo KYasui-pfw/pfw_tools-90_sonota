@@ -89,6 +89,8 @@ class RBOMConnector:
 
                     # D3340テーブル情報（発注数量）
                     'order_quantity': item.get('THQTY'),  # 発注数量（D3340.THQTY）
+                    'ktcd': item.get('KTCD'),  # 工程コード（D3340.KTCD）
+                    'srcd': item.get('SRCD'),  # 仕入先コード（D3330.SRCD）
 
                     # D3010テーブル情報
                     'd3010_seino': item.get('D3010_SEINO'),
