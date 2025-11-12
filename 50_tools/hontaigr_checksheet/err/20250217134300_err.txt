@@ -1,0 +1,3 @@
+(sqlite3.OperationalError) no such table: production_machine_info
+[SQL: select * from production_machine_info where (”N = '2025' and  ('02' = '' or ŒŽ = '02' ) and ('' = '' or ŽŸ = '' )) ]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)

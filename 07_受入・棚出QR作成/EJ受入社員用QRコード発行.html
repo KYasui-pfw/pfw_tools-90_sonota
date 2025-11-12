@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>EJ受入社員用QRコード発行</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.31.0/build/stlite.css">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.31.0/build/stlite.js"></script>
+    <script>
+stlite.mount(
+  {
+    requirements: ["pyodide-http", "qrcode", "pillow"],
+    entrypoint: "streamlit_app.py",
+    files: {
+      "streamlit_app.py": `
+import streamlit as st
+import json
+import pyodide_http
+import urllib.request
+import qrcode
+from io import BytesIO
+from PIL import Image
+
+# Pyodide環境でurllibを使えるようにパッチ
+pyodide_http.patch_all()
+
+# ページ設定（上部スペースを削減）
+st.set_page_config(page_title="EJ受入社員用QRコード発行", layout="centered")
+
+# カスタムCSSで上部の余白を削除とタイトル背景色を設定
+st.markdown("""
+    <style>
+        .block-container {
+            padding-top: 1rem;
+        }
+        h1 {
+            background-color: #f3e8ff;
+            padding: 1rem;
+            border-radius: 0.5rem;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("EJ受入社員用QRコード発行")
+
+# API設定
+API_URL = "http://pfw-api/query"
+API_KEY = "oG5^Ls%#20yq"
+
+# セッションステートでデータを管理
+if "employees" not in st.session_state:
+    st.session_state.employees = None
+
+# 社員データ取得関数
+def get_employees():
+    try:
+        # リクエストデータ
+        request_data = {
+            "table": "M0540",
+            "columns": ["TANCD", "TANNM"],
+            "order_by": ["TANCD"]
+        }
+
+        # HTTPリクエスト作成
+        req = urllib.request.Request(
+            API_URL,
+            data=json.dumps(request_data).encode('utf-8'),
+            headers={
+                "Content-Type": "application/json",
+                "X-API-KEY": API_KEY
+            },
+            method="POST"
+        )
+
+        # リクエスト実行
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            return data.get("rows", [])
+
+    except Exception as e:
+        st.error(f"API接続エラー: {str(e)}")
+        import traceback
+        st.text(traceback.format_exc())
+        return []
+
+# データ取得（初回のみ）
+if st.session_state.employees is None:
+    with st.spinner("社員データを読み込んでいます..."):
+        st.session_state.employees = get_employees()
+
+employees = st.session_state.employees
+
+if not employees:
+    st.warning("社員データを取得できませんでした")
+    if st.button("再読み込み"):
+        st.session_state.employees = None
+        st.rerun()
+    st.stop()
+
+# PFW-から始まる社員コードのみフィルタリング
+filtered_employees = [emp for emp in employees if emp.get("TANCD", "").startswith("PFW-")]
+
+if not filtered_employees:
+    st.warning("PFW-から始まる社員データがありません")
+    if st.button("再読み込み"):
+        st.session_state.employees = None
+        st.rerun()
+    st.stop()
+
+# 社員名のリストを作成（空欄を先頭に追加）
+employee_names = [""] + [emp.get("TANNM", "") for emp in filtered_employees]
+
+# 2カラムレイアウト
+col1, col2 = st.columns(2)
+
+with col1:
+    selected_name = st.selectbox(
+        "社員名:",
+        options=employee_names,
+        index=0
+    )
+
+with col2:
+    tancd_value = ""
+    if selected_name:
+        selected_employee = next(
+            (emp for emp in filtered_employees if emp.get("TANNM") == selected_name),
+            None
+        )
+        if selected_employee:
+            tancd_value = selected_employee.get("TANCD", "")
+
+    st.text_input(
+        "社員コード:",
+        value=tancd_value,
+        disabled=True
+    )
+
+# QRコード生成と表示（社員が選択されている場合のみ）
+if selected_name:
+    selected_employee = next(
+        (emp for emp in filtered_employees if emp.get("TANNM") == selected_name),
+        None
+    )
+    if selected_employee:
+        tancd = selected_employee.get("TANCD", "")
+
+        # QRコードの内容を生成
+        qr_content = f"jp.co.cimtops.ireporter.createreport:defid=764&担当者コード：={tancd}"
+
+        # QRコード生成
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_content)
+        qr.make(fit=True)
+
+        # QRコード画像を生成
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        # QRコード表示
+        # サイズ調整スライダー
+        qr_size = st.slider("QRコードサイズ", min_value=100, max_value=500, value=300, step=50)
+
+        # 指定サイズにリサイズした画像を生成
+        img_pil = img.convert("RGB")
+        img_resized = img_pil.resize((qr_size, qr_size), Image.Resampling.NEAREST)
+
+        # リサイズした画像をバッファに保存
+        buf_resized = BytesIO()
+        img_resized.save(buf_resized, format="PNG")
+        buf_resized.seek(0)
+
+        # QRコード画像を表示
+        st.image(buf_resized, width=qr_size)
+
+        # ダウンロードボタン
+        st.download_button(
+            label="ダウンロード",
+            data=buf_resized.getvalue(),
+            file_name=f"QR_{tancd}.png",
+            mime="image/png"
+        )
+`
+    }
+  },
+  document.getElementById("root")
+);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,50 @@
+====================================== 
+Environment Variables Investigation Results 
+Execution DateTime: 2025-09-22 13:44:27 
+====================================== 
+ 
+[Oracle Related Environment Variables] 
+ORA_PATH=C:\Dev\90_tools\90_temp\PFW_IT2\EXE\instantclient_12c 
+ORACLE_HOME=C:\Dev\90_tools\90_temp\PFW_IT2\EXE\instantclient_12c 
+TNS_ADMIN=C:\Dev\90_tools\90_temp\PFW_IT2\EXE\instantclient_12c 
+ORACLE_SID=RBOM 
+NLS_LANG=JAPANESE_JAPAN.JA16SJISTILDE 
+PATH=C:\Dev\90_tools\90_temp\PFW_IT2\EXE\instantclient_12c;C:\Users\yasui.PFW_DESIGN\AppData\Local\ActiveState\StateTool\release\bin;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files (x86)\NEC\Obbligato III\Client\addon;C:\Program Files\Amazon\AWSCLIV2\;C:\Oracle\instantclient_23_8;C:\Program Files\Microsoft VS Code\bin;C:\xampp\php;C:\Program Files\Git\cmd;C:\ProgramData\ComposerSetup\bin;C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\;C:\Program Files (x86)\Microsoft SQL Server\150\Tools\Binn\;C:\Program Files\Microsoft SQL Server\150\Tools\Binn\;C:\Program Files\Microsoft SQL Server\150\DTS\Binn\;C:\Program Files (x86)\Microsoft SQL Server\160\DTS\Binn\;C:\Program Files\Docker\Docker\resources\bin;C:\Program Files\Tesseract-OCR;C:\Program Files\dotnet\;C:\ffmpeg\ffmpeg-master-latest-win64-gpl-shared\bin;C:\Program Files\TortoiseGit\bin;C:\Program Files\nodejs\;C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit\;C:\Program Files\Tailscale\;C:\Users\yasui.PFW_DESIGN\.local\bin;C:\Users\yasui.PFW_DESIGN\AppData\Local\Programs\Python\Python312\Scripts\;C:\Users\yasui.PFW_DESIGN\AppData\Local\Programs\Python\Python312\;C:\Users\yasui.PFW_DESIGN\AppData\Local\Microsoft\WindowsApps;C:\Users\yasui.PFW_DESIGN\AppData\Roaming\Composer\vendor\bin;C:\Program Files\Tesseract-OCR;C:\ffmpeg\ffmpeg-master-latest-win64-gpl-shared\bin;C:\Program Files (x86)\Nmap;C:\Users\yasui.PFW_DESIGN\AppData\Local\Programs\EmEditor;C:\Users\yasui.PFW_DESIGN\AppData\Roaming\npm 
+ 
+[System Environment Variables] 
+COMPUTERNAME=EFDX02 
+USERNAME=yasui 
+USERDOMAIN=PFW_DESIGN 
+OS=Windows_NT 
+PROCESSOR_ARCHITECTURE=AMD64 
+TEMP=C:\Users\YASUI~1.PFW\AppData\Local\Temp 
+TMP=C:\Users\YASUI~1.PFW\AppData\Local\Temp 
+WINDIR=C:\Windows 
+SYSTEMROOT=C:\Windows 
+ 
+[Network Configuration] 
+IPv4 Address 100.88.136.31 
+IPv4 Address 172.17.37.2 
+ 
+[Network Adapter Information] 
+ 
+[Ping Test to 172.21.0.26] 
+
+172.21.0.26 に ping を送信しています 32 バイトのデータ:
+172.21.0.26 からの応答: バイト数 =32 時間 =6ms TTL=124
+172.21.0.26 からの応答: バイト数 =32 時間 =6ms TTL=124
+172.21.0.26 からの応答: バイト数 =32 時間 =6ms TTL=124
+172.21.0.26 からの応答: バイト数 =32 時間 =6ms TTL=124
+
+172.21.0.26 の ping 統計:
+    パケット数: 送信 = 4、受信 = 4、損失 = 0 (0% の損失)、
+ラウンド トリップの概算時間 (ミリ秒):
+    最小 = 6ms、最大 = 6ms、平均 = 6ms
+ 
+[Java Related Environment Variables] 
+JAVA_HOME=Not Set 
+JRE_HOME=Not Set 
+ 
+[Current Directory] 
+CD=C:\Dev\90_tools\90_temp\PFW_IT2\EXE 
+ 

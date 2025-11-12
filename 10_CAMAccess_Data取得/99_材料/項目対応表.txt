@@ -1,0 +1,35 @@
+こっちがユニット配下
+目切開始：SL1ST　⇒Format([resultStart],"mm/dd"
+目切り：SL1　目切が終わったということ　⇒目切完了: Format([resultEnd],"mm/dd")
+目切り：SL2　（10/22久原さんより　この工程は使わないとのこと）
+胴体焼入:TQT　⇒JOB_8
+DK羽口:TY　⇒JOB_1
+DK焼入:DQT　⇒JOB_2 ※ダイヤルはDDQT(DIAL焼入）
+
+こっちはユニット自体
+入れ目:FL　⇒JOB_3
+研磨:G　⇒JOB_5
+IPバフ：BF　⇒JOB_6
+CYL仕上完了：CYFIN　⇒JOB_7
+DIAL仕上完了：DIFIN　⇒JOB_7（同じく）
+
+SKレストリング:RST　⇒JOB_4
+
+
+シリンダとかダイヤルは、当然一つの機械に一つ
+
+
+- KatLstCyl_Allから実績
+- DENPYONOをキーに、組み立て番号を持ってくる
+- CATで以下を判定
+- unit cylinder
+	- needle cyl cat405
+- unit dial
+	- needle dial cat409
+
+目切開始: Format([resultStart],"mm/dd")
+目切完了: Format([resultEnd],"mm/dd")
+
+
+
+HMNMがNEEDLE DIAL NEEDLE CYLNDER

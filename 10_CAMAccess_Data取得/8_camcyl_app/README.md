@@ -155,7 +155,9 @@ tail -f logs/process2_YYYYMMDD.log
   - `\\172.17.81.101\schejule\camline\EJ\EJ_DETA_SERVER\EJデータマスター.accdb`
 
 - **抽出テーブル**:
-  - `KaLstCyl_All` → `Cyl_pfw_table_KaLstCyl_All.csv`
+  - `KaLstCyl_All` + `ジョブ` (LEFT JOIN) → `Cyl_pfw_table_KaLstCyl_All.csv`
+    - 結合条件: `KaLstCyl_All.KUMITATENO_Job = ジョブ.lotCode`
+    - ジョブテーブルの全項目を追加
   - `CAMFIN_LOG_ALL` → `EJデータマスター_CAMFIN_LOG_ALL.csv`
 
 - **出力**: `/home/docker-user/KakouJisseki/`

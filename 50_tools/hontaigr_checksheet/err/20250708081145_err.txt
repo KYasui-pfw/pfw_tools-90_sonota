@@ -1,0 +1,24 @@
+Message: invalid session id: session deleted as the browser has closed the connection
+from disconnected: not connected to DevTools
+  (Session info: chrome=137.0.7151.122)
+Stacktrace:
+	GetHandleVerifier [0x0x7ff6168acda5+78885]
+	GetHandleVerifier [0x0x7ff6168ace00+78976]
+	(No symbol) [0x0x7ff616669bca]
+	(No symbol) [0x0x7ff6166559b5]
+	(No symbol) [0x0x7ff61667a9ca]
+	(No symbol) [0x0x7ff6166f05e5]
+	(No symbol) [0x0x7ff616710b42]
+	(No symbol) [0x0x7ff6166e8963]
+	(No symbol) [0x0x7ff6166b16b1]
+	(No symbol) [0x0x7ff6166b2443]
+	GetHandleVerifier [0x0x7ff616b84eed+3061101]
+	GetHandleVerifier [0x0x7ff616b7f33d+3037629]
+	GetHandleVerifier [0x0x7ff616b9e592+3165202]
+	GetHandleVerifier [0x0x7ff6168c730e+186766]
+	GetHandleVerifier [0x0x7ff6168ceb3f+217535]
+	GetHandleVerifier [0x0x7ff6168b59b4+114740]
+	GetHandleVerifier [0x0x7ff6168b5b69+115177]
+	GetHandleVerifier [0x0x7ff61689c368+10728]
+	BaseThreadInitThunk [0x0x7fff08ac4cb0+16]
+	RtlUserThreadStart [0x0x7fff09dbedcb+43]

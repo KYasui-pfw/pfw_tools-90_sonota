@@ -35,6 +35,9 @@ COPY entrypoint.sh /app/entrypoint.sh
 # スクリプトに実行権限を付与
 RUN chmod +x /app/scripts/*.sh /app/entrypoint.sh
 
+# .envファイルをコピー（cron実行時に読み込むため）
+COPY .env /app/.env
+
 # crontabファイルをコピーして設定
 COPY crontab /etc/cron.d/camcyl-cron
 RUN chmod 0644 /etc/cron.d/camcyl-cron && \

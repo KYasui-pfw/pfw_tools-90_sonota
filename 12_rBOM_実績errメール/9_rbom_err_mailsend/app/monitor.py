@@ -475,10 +475,10 @@ class ErrorMonitor:
                 if not pono or not polineno:
                     continue
 
-                # D3340からSEINOを含む詳細情報を取得
+                # D3340からSEINOと仕入先を含む詳細情報を取得
                 detail_payload = {
                     "table": "D3340",
-                    "columns": ["SEINO", "LISTNO", "HMCD", "HMNM"],
+                    "columns": ["SEINO", "HMNM", "SRCD"],
                     "where": {
                         "and": [
                             {"PONO": pono},
@@ -522,7 +522,7 @@ class ErrorMonitor:
 
         Args:
             record: DK020のレコード
-            detail: D3340のレコード（SEINO, LISTNO, HMCD, HMNM）
+            detail: D3340のレコード（SEINO, HMNM, SRCD）
         """
         # レコードIDを生成
         pono = record.get("PONO", "")
@@ -551,6 +551,25 @@ class ErrorMonitor:
 
         employee_name = employee.get("tannm") or employee_code
 
+        # 仕入先名を取得
+        srcd = detail.get("SRCD", "")
+        vendor_name = "-"
+        if srcd:
+            try:
+                vendor_payload = {
+                    "table": "M0710",
+                    "columns": ["HTRNM1"],
+                    "where": {"HTRCD": srcd}
+                }
+                vendor_response = requests.post(self.api_url, json=vendor_payload, headers=self.headers, timeout=30)
+                vendor_response.raise_for_status()
+                vendor_data = vendor_response.json()
+                vendor_rows = vendor_data.get("rows", [])
+                if vendor_rows:
+                    vendor_name = vendor_rows[0].get("HTRNM1", "-")
+            except Exception as e:
+                logger.warning(f"[経費工具受入] 仕入先名取得エラー: SRCD={srcd}, {e}")
+
         # メール送信先を取得（TO/CC）
         to_emails = self.db_manager.get_recipients(employee_code, "expense_tool", "TO")
         cc_emails = self.db_manager.get_recipients(employee_code, "expense_tool", "CC")
@@ -577,8 +596,8 @@ class ErrorMonitor:
                 order_no=pono,
                 order_label="発注番号",
                 line_no=polineno,
-                listno=detail.get("LISTNO", "-"),
-                hmcd=detail.get("HMCD", "-"),
+                listno=f"{srcd} ({vendor_name})",  # 仕入先コード (仕入先名)
+                hmcd=str(record.get("RCVQTY", "-")),  # 受入数
                 hmnm=detail.get("HMNM", "-"),
                 instdt=instdt_formatted,
                 error_detail="メール送信先が設定されていないため送信スキップ"
@@ -600,8 +619,8 @@ class ErrorMonitor:
             "instdt": instdt_formatted,
             "iptancd": employee_code,
             "employee_name": employee_name,
-            "listno": detail.get("LISTNO", "-"),
-            "hmcd": detail.get("HMCD", "-"),
+            "listno": f"{srcd} ({vendor_name})",  # 仕入先コード (仕入先名)
+            "hmcd": str(record.get("RCVQTY", "-")),  # 受入数
             "hmnm": detail.get("HMNM", "-")
         }
 
@@ -625,8 +644,8 @@ class ErrorMonitor:
                 order_no=pono,
                 order_label="発注番号",
                 line_no=polineno,
-                listno=detail.get("LISTNO", "-"),
-                hmcd=detail.get("HMCD", "-"),
+                listno=f"{srcd} ({vendor_name})",  # 仕入先コード (仕入先名)
+                hmcd=str(record.get("RCVQTY", "-")),  # 受入数
                 hmnm=detail.get("HMNM", "-"),
                 instdt=instdt_formatted,
                 error_detail=error_detail_summary

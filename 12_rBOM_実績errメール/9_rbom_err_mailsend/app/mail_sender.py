@@ -104,7 +104,7 @@ class MailSender:
         """
         function_name = error_data.get("function_name", "不明")
         record_info = error_data.get("record_info", {})
-        
+
         # 基本情報
         order_no = record_info.get("order_no", "-")
         order_label = record_info.get("order_label", "番号")
@@ -112,13 +112,34 @@ class MailSender:
         instdt = record_info.get("instdt", "-")
         iptancd = record_info.get("iptancd", "-")
         employee_name_detail = record_info.get("employee_name", employee_name)
-        
+
         # 品目情報
         listno = record_info.get("listno", "-")
         hmcd = record_info.get("hmcd", "-")
         hmnm = record_info.get("hmnm", "-")
 
-        body = f"""
+        # 経費工具受入機能の場合は異なるテンプレートを使用
+        if function_name == "経費工具受入機能":
+            body = f"""
+経費工具発注品の受入が行われましたので、通知いたします。
+
+以下の受入情報をご確認ください。
+
+【受入品情報】
+機能: {function_name}
+{order_label}: {order_no}　　行番号: {line_no}
+仕入先: {listno}
+受入数: {hmcd}
+品目名: {hmnm}
+登録日時: {instdt}
+更新社員: {iptancd} ({employee_name_detail})
+
+※このメールは自動送信されています。
+※ご不明な点がございましたら、システム管理者までお問い合わせください。
+"""
+        else:
+            # エラーメールのテンプレート（従来通り）
+            body = f"""
 rBOMへの実績登録時に登録エラーを検知しました。
 
 以下のデータでエラーが発生しています。

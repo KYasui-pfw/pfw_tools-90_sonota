@@ -159,6 +159,25 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
             logger.info(f"  重複削除: {duplicates_removed:,}行削除 → {len(df_deduplicated):,}行")
             df = df_deduplicated
 
+        # 数値列をint型に変換（空欄は空欄のまま）
+        def convert_to_int(value):
+            if pd.isna(value) or value == '':
+                return ''
+            try:
+                return int(float(value))  # float経由でintに変換（202501.0 → 202501）
+            except (ValueError, TypeError):
+                return value  # 変換できない場合はそのまま
+
+        # 「生産月次」列の変換
+        if '生産月次' in df.columns:
+            df['生産月次'] = df['生産月次'].apply(convert_to_int)
+            logger.info(f"  生産月次列をint型に変換（空欄は保持）")
+
+        # 「払出先」列の変換
+        if '払出先' in df.columns:
+            df['払出先'] = df['払出先'].apply(convert_to_int)
+            logger.info(f"  払出先列をint型に変換（空欄は保持）")
+
         # 出力先ディレクトリが存在しない場合は作成
         os.makedirs(output_dir, exist_ok=True)
 

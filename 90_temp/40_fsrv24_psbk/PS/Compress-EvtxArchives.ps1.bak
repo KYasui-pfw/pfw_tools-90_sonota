@@ -1,0 +1,279 @@
+# EVTXアーカイブファイル(System、Security、Application)を検索してCAB形式に圧縮するスクリプト
+# 日付ごとにグループ化して圧縮する機能付き
+# 1年以上経過したCABファイルを自動削除する機能付き
+
+# パラメータ設定
+param(
+    [Parameter(Mandatory=$false)]
+    [string]$SourceFolder = "C:\Windows\System32\winevt\Logs", # アーカイブevtxファイルの場所
+    
+    [Parameter(Mandatory=$false)]
+    [string]$DestinationFolder = "D:\Logs", # 圧縮ファイルの保存先
+    
+    [Parameter(Mandatory=$false)]
+    [string]$TempFolder = "D:\Logs\Temp", # 一時作業フォルダ
+    
+    [Parameter(Mandatory=$false)]
+    [int]$RetentionMonths = 6 # 保持期間（月数）
+)
+
+function Create-FolderIfNotExists {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FolderPath
+    )
+    
+    if (-not (Test-Path -Path $FolderPath -PathType Container)) {
+        try {
+            New-Item -Path $FolderPath -ItemType Directory -Force | Out-Null
+            Write-Host "フォルダを作成しました: $FolderPath"
+        }
+        catch {
+            Write-Error "フォルダの作成に失敗しました: $FolderPath - $_"
+            exit 1
+        }
+    }
+}
+
+function Compress-EvtxFilesByDate {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$SourceDir,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$DestDir,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$TempDir
+    )
+    
+    # 対象とするイベントログの種類
+    $targetLogTypes = @("System", "Security", "Application")
+    
+    # 圧縮対象ファイルを取得（指定した3種類のみ）
+    $evtxFiles = @()
+    foreach ($logType in $targetLogTypes) {
+        $archivePattern = "Archive*$logType*.evtx"
+        $files = Get-ChildItem -Path $SourceDir -Filter $archivePattern -File
+        if ($files) {
+            $evtxFiles += $files
+        }
+    }
+    
+    if ($evtxFiles.Count -eq 0) {
+        Write-Host "対象となるアーカイブevtxファイル（System、Security、Application）が見つかりませんでした。"
+        return $false
+    }
+    
+    Write-Host "対象のアーカイブevtxファイルを $($evtxFiles.Count) 個見つけました。"
+    
+    # ファイルを日付ごとにグループ化
+    $filesByDate = @{}
+    
+    foreach ($file in $evtxFiles) {
+        # ファイル名からYYYY-MM-DD形式の日付を抽出（Archive-Security-2025-04-11-02-53-22-343.evtx のような形式）
+        if ($file.Name -match "Archive-\w+-(\d{4}-\d{2}-\d{2})") {
+            $dateString = $matches[1]  # YYYY-MM-DD形式の日付
+            
+            # グループが存在しない場合は新規作成
+            if (-not $filesByDate.ContainsKey($dateString)) {
+                $filesByDate[$dateString] = @()
+            }
+            
+            # 該当する日付のグループにファイルを追加
+            $filesByDate[$dateString] += $file
+        }
+        else {
+            Write-Warning "ファイル名から日付を抽出できませんでした: $($file.Name)"
+        }
+    }
+    
+    # 日付ごとにファイルを圧縮
+    $successCount = 0
+    $failCount = 0
+    
+    foreach ($dateKey in $filesByDate.Keys) {
+        $filesInDate = $filesByDate[$dateKey]
+        $dateFormatted = $dateKey.Replace("-", "")  # YYYYMMDD形式に変換
+        
+        Write-Host "`n日付 $dateKey のファイル ($($filesInDate.Count)個) を圧縮します..."
+        
+        # CABファイル名の設定
+        $cabFileName = "EventLogs_${dateFormatted}.cab"
+        $cabFilePath = Join-Path -Path $DestDir -ChildPath $cabFileName
+        
+        # 既にCABファイルが存在する場合はスキップ
+        if (Test-Path $cabFilePath) {
+            Write-Host "同じ日付のCABファイルが既に存在します: $cabFileName - スキップします"
+            continue
+        }
+        
+        # 一時フォルダをクリア
+        Get-ChildItem -Path $TempDir -File | Remove-Item -Force -ErrorAction SilentlyContinue
+        
+        # ディレクティブファイル（DDF）のパス
+        $ddfFilePath = Join-Path -Path $TempDir -ChildPath "evtx_compress_$dateFormatted.ddf"
+        
+        # DDFファイルの内容を作成
+        $ddfContent = @"
+.OPTION EXPLICIT
+.Set CabinetNameTemplate=$cabFileName
+.Set DiskDirectory1=$DestDir
+.Set MaxDiskSize=0
+.Set Cabinet=on
+.Set Compress=on
+"@
+        
+        # 圧縮対象ファイルをコピーして、DDFファイルにエントリを追加
+        foreach ($file in $filesInDate) {
+            $tempFilePath = Join-Path -Path $TempDir -ChildPath $file.Name
+            
+            try {
+                Copy-Item -Path $file.FullName -Destination $tempFilePath -Force
+                $ddfContent += "`n`"$tempFilePath`" `"$($file.Name)`""
+            }
+            catch {
+                Write-Warning "ファイルのコピーに失敗しました: $($file.FullName) - $_"
+                continue
+            }
+        }
+        
+        # DDFファイルの保存
+        $ddfContent | Out-File -FilePath $ddfFilePath -Encoding ascii
+        
+        # MakeCabコマンドの実行
+        try {
+            $makeCabOutput = makecab.exe /F $ddfFilePath
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "CAB作成に失敗しました。終了コード: $LASTEXITCODE"
+                $failCount++
+                continue
+            }
+        }
+        catch {
+            Write-Error "CAB作成中にエラーが発生しました: $_"
+            $failCount++
+            continue
+        }
+        
+        # 圧縮が成功したら、元のアーカイブファイルを削除
+        if (Test-Path $cabFilePath) {
+            Write-Host "CABファイルが正常に作成されました: $cabFilePath"
+            
+            foreach ($file in $filesInDate) {
+                try {
+                    Remove-Item -Path $file.FullName -Force
+                    Write-Host "元のアーカイブファイルを削除しました: $($file.FullName)"
+                }
+                catch {
+                    Write-Warning "ファイルの削除に失敗しました: $($file.FullName) - $_"
+                }
+            }
+            
+            $successCount++
+        }
+        else {
+            Write-Error "CABファイルが作成されませんでした。"
+            $failCount++
+        }
+        
+        # 一時ファイルのクリーンアップ
+        Remove-Item -Path $ddfFilePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path (Join-Path -Path $TempDir -ChildPath "*.evtx") -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path (Join-Path -Path $DestDir -ChildPath "setup.inf") -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path (Join-Path -Path $DestDir -ChildPath "setup.rpt") -Force -ErrorAction SilentlyContinue
+    }
+    
+    Write-Host "`n日付別圧縮処理の結果: 成功: $successCount 日分、失敗: $failCount 日分"
+    return ($successCount -gt 0)
+}
+
+function Remove-OldCabFiles {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FolderPath,
+        
+        [Parameter(Mandatory=$true)]
+        [int]$MonthsToKeep
+    )
+    
+    # 現在の日付から保持期間を引いた日付を計算
+    $cutoffDate = (Get-Date).AddMonths(-$MonthsToKeep)
+    
+    Write-Host "保持期間: $MonthsToKeep ヶ月 (削除基準日: $($cutoffDate.ToString('yyyy/MM/dd')))"
+    
+    # EventLogs_*.cab ファイルを検索
+    $cabFiles = Get-ChildItem -Path $FolderPath -Filter "EventLogs_*.cab" -File
+    
+    if ($cabFiles.Count -eq 0) {
+        Write-Host "削除対象となるCABファイルが見つかりませんでした。"
+        return $false
+    }
+    
+    $removedCount = 0
+    $keptCount = 0
+    
+    foreach ($file in $cabFiles) {
+        # ファイル名から日付部分を抽出（EventLogs_YYYYMMDD.cab）
+        if ($file.BaseName -match "_(\d{8})$") {
+            $dateString = $matches[1]
+            try {
+                # YYYYMMDD形式の文字列を日付オブジェクトに変換
+                $fileDate = [datetime]::ParseExact($dateString, "yyyyMMdd", $null)
+                
+                # カットオフ日付より古いファイルを削除
+                if ($fileDate -lt $cutoffDate) {
+                    try {
+                        Remove-Item -Path $file.FullName -Force
+                        Write-Host "古いCABファイルを削除しました: $($file.Name) (作成日: $($fileDate.ToString('yyyy/MM/dd')))"
+                        $removedCount++
+                    }
+                    catch {
+                        Write-Warning "ファイルの削除に失敗しました: $($file.FullName) - $_"
+                    }
+                }
+                else {
+                    $keptCount++
+                }
+            }
+            catch {
+                Write-Warning "ファイル名から日付を解析できませんでした: $($file.Name) - $_"
+            }
+        }
+        else {
+            Write-Warning "ファイル名のパターンが一致しません: $($file.Name)"
+        }
+    }
+    
+    Write-Host "古いCABファイルの削除処理が完了しました。削除: $removedCount 件、保持: $keptCount 件"
+    return $true
+}
+
+# メイン処理
+try {
+    # 処理開始メッセージ
+    Write-Host "EVTXアーカイブファイル圧縮処理を開始します（$(Get-Date -Format 'yyyy/MM/dd HH:mm:ss')）"
+    
+    # 保存先フォルダの確認・作成
+    Create-FolderIfNotExists -FolderPath $DestinationFolder
+    Create-FolderIfNotExists -FolderPath $TempFolder
+    
+    # System、Security、Applicationのアーカイブファイルのみを対象に日付別に圧縮処理
+    $compressResult = Compress-EvtxFilesByDate -SourceDir $SourceFolder -DestDir $DestinationFolder -TempDir $TempFolder
+    
+    # 古いCABファイルの削除処理を実行
+    Write-Host "`n古いCABファイルの削除処理を開始します..."
+    $cleanupResult = Remove-OldCabFiles -FolderPath $DestinationFolder -MonthsToKeep $RetentionMonths
+    
+    # 処理結果のサマリー
+    Write-Host "`n処理サマリー:"
+    Write-Host "----------------------------------------"
+    Write-Host "圧縮処理: $(if ($compressResult) {"成功"} else {"一部エラーあり"})"
+    Write-Host "クリーンアップ処理: $(if ($cleanupResult) {"成功"} else {"一部エラーあり"})"
+    Write-Host "----------------------------------------"
+    Write-Host "処理完了時刻: $(Get-Date -Format 'yyyy/MM/dd HH:mm:ss')"
+}
+catch {
+    Write-Error "処理中にエラーが発生しました: $_"
+    exit 1
+}

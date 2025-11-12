@@ -1,0 +1,26 @@
+Message: no such element: Unable to locate element: {"method":"xpath","selector":"//*[@id="DetailSection"]/div/div[2]/input"}
+  (Session info: chrome=109.0.5414.168); For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#no-such-element-exception
+Stacktrace:
+Backtrace:
+	(No symbol) [0x005D6643]
+	(No symbol) [0x0056BE21]
+	(No symbol) [0x0046DA9D]
+	(No symbol) [0x004A1342]
+	(No symbol) [0x004A147B]
+	(No symbol) [0x004D8DC2]
+	(No symbol) [0x004BFDC4]
+	(No symbol) [0x004D6B09]
+	(No symbol) [0x004BFB76]
+	(No symbol) [0x004949C1]
+	(No symbol) [0x00495E5D]
+	GetHandleVerifier [0x0084A142+2497106]
+	GetHandleVerifier [0x008785D3+2686691]
+	GetHandleVerifier [0x0087BB9C+2700460]
+	GetHandleVerifier [0x00683B10+635936]
+	(No symbol) [0x00574A1F]
+	(No symbol) [0x0057A418]
+	(No symbol) [0x0057A505]
+	(No symbol) [0x0058508B]
+	BaseThreadInitThunk [0x75EF6A24+36]
+	RtlInitializeExceptionChain [0x7748AA6F+143]
+	RtlInitializeExceptionChain [0x7748AA3A+90]

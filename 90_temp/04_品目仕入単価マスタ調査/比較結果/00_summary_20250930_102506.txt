@@ -1,0 +1,20 @@
+=== HMCD比較結果サマリー ===
+
+処理日時: 2025/09/30 10:25:07
+
+入力ファイル:
+  マスタファイル: M0910_品目仕入単価マスタ.csv (3932 records)
+  元ファイル: 仕入単価_元.csv (276306 records)
+
+HMCD統計:
+  マスタ側ユニークHMCD数: 3454
+  元側ユニークHMCD数: 107985
+  一致したHMCD数: 3206
+  マスタのみのHMCD数: 248
+  元のみのHMCD数: 104779
+
+出力ファイル:
+  01_master_matched: 3681 records
+  02_master_unmatched: 251 records
+  03_source_matched: 12710 records
+  04_source_unmatched: 263596 records

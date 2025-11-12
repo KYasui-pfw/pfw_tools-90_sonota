@@ -1,0 +1,188 @@
+UCanAccessを使った処理をDocker化するのは、開発環境と本番環境を揃える上で非常に優れた方法です。Windowsで開発・ビルドしたDockerイメージを、そのままLinuxサーバーで実行できます。
+
+「データベースを読み取ってCSV出力する」という軽微なツールに最適な、具体的な手順を解説します。
+
+1. 準備：プロジェクトのフォルダ構成 📂
+まず、Windows上に以下のようなフォルダ構成でプロジェクトを準備します。
+
+docker-access/
+|
+|-- Dockerfile              # Dockerイメージの設計図
+|-- requirements.txt        # Pythonのライブラリリスト
+|-- app.py                  # メインの処理スクリプト
+|
+|-- ucanaccess_lib/         # UCanAccessのjarファイルを入れておくフォルダ
+|   |-- ucanaccess-5.0.1.jar
+|   |-- commons-lang3-3.8.1.jar
+|   |-- commons-logging-1.2.jar
+|   |-- hsqldb-2.5.0.jar
+|   |-- jackcess-3.0.1.jar
+|
+|-- data/                   # 入力となるAccess DBを置く場所
+|   |-- your_database.accdb
+|
+|-- output/                 # 出力されるCSVが保存される場所 (実行時に自動作成)
+事前準備:
+
+UCanAccess公式サイトからライブラリをダウンロードし、上記の5つの.jarファイルをucanaccess_libフォルダにコピーしておきます。
+
+2. 各ファイルの作成 📝
+次に、各ファイルを具体的に作成していきます。
+
+a) requirements.txt
+Pythonで必要なライブラリを記述します。今回は、DB操作とCSV出力を簡単にするためpandasも使うことをお勧めします。
+
+Plaintext
+
+JayDeBeApi
+pandas
+b) Dockerfile
+コンテナの設計図です。JavaとPythonの環境を構築し、必要なファイルをコピーします。
+
+Dockerfile
+
+# ベースイメージとしてPython 3.10のスリム版を選択
+FROM python:3.10-slim-bullseye
+
+# 作業ディレクトリを設定
+WORKDIR /app
+
+# 最初にJava (JDK) をインストール
+# aptのキャッシュを削除してイメージサイズを小さくする
+RUN apt-get update && \
+    apt-get install -y default-jdk-headless && \
+    rm -rf /var/lib/apt/lists/*
+
+# Pythonライブラリをインストール（先にこれを行うと、ソースコード変更時のビルドが高速化する）
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# UCanAccessのjarファイル群をコンテナ内にコピー
+COPY ucanaccess_lib/ ./ucanaccess_lib/
+
+# 実行するPythonスクリプトをコピー
+COPY app.py .
+
+# コンテナ起動時に実行するコマンド
+CMD [ "python", "app.py" ]
+c) app.py
+メインの処理スクリプトです。コンテナ内のパスを意識して記述します。
+
+Python
+
+import jaydebeapi
+import pandas as pd
+import os
+
+# --- 設定 ---
+# コンテナ内のデータパス (docker runコマンドでマウントする)
+INPUT_DIR = "/app/data"
+OUTPUT_DIR = "/app/output"
+
+# 環境変数からファイル名を取得、なければデフォルト値を使用
+DB_FILENAME = os.getenv('DB_FILE', 'your_database.accdb')
+TABLE_NAME = os.getenv('TABLE_NAME', 'YourTableName') # 実際のテーブル名に！
+OUTPUT_FILENAME = os.getenv('OUTPUT_FILE', 'output.csv')
+
+DB_FILE_PATH = os.path.join(INPUT_DIR, DB_FILENAME)
+OUTPUT_FILE_PATH = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
+
+# --- UCanAccess 接続情報 ---
+# コンテナ内のjarファイルのパス
+ucanaccess_dir = "/app/ucanaccess_lib"
+jars = [
+    os.path.join(ucanaccess_dir, jar_file) for jar_file in os.listdir(ucanaccess_dir)
+]
+classpath = ":".join(jars)
+driver = 'net.ucanaccess.jdbc.UcanaccessDriver'
+conn_str = f"jdbc:ucanaccess://{DB_FILE_PATH}"
+
+# --- メイン処理 ---
+conn = None
+try:
+    print(f"データベースに接続しています: {DB_FILE_PATH}")
+    conn = jaydebeapi.connect(driver, conn_str, {}, jars=classpath)
+    print("接続に成功しました。")
+
+    query = f'SELECT * FROM "{TABLE_NAME}"'
+    print(f"クエリを実行します: {query}")
+
+    # pandasを使ってデータをDataFrameとして読み込む
+    df = pd.read_sql_query(query, conn)
+    print(f"{len(df)}件のデータを取得しました。")
+
+    # outputフォルダが存在しない場合は作成
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # DataFrameをCSVファイルとして出力
+    df.to_csv(OUTPUT_FILE_PATH, index=False, encoding='utf-8-sig')
+    print(f"CSVファイルを出力しました: {OUTPUT_FILE_PATH}")
+
+except Exception as e:
+    print(f"エラーが発生しました: {e}")
+
+finally:
+    if conn:
+        conn.close()
+        print("データベース接続を閉じました。")
+ポイント: スクリプト内では /app/data/ のように、コンテナ内の絶対パスでファイルを扱います。実際のファイルは後述のdocker runコマンドでPC上のフォルダと紐づけられます。
+
+3. Dockerイメージのビルドと実行 ⚙️
+PowerShellやコマンドプロンプトを開き、docker-accessフォルダに移動して以下のコマンドを実行します。
+
+a) ビルド (イメージの作成)
+Bash
+
+docker build -t access-to-csv .
+-t access-to-csv は、作成するイメージに access-to-csv という名前を付けるオプションです。
+
+b) 実行 (コンテナの起動)
+Bash
+
+docker run --rm -v ./data:/app/data -v ./output:/app/output access-to-csv
+このコマンドの意味は以下の通りです。
+
+--rm: コンテナの処理が終わったら自動的に削除します。（使い捨てのスクリプト実行に便利）
+
+-v ./data:/app/data: ボリュームのマウント。PC上のdataフォルダを、コンテナ内の/app/dataフォルダに接続します。これにより、コンテナはPC上のyour_database.accdbを読み込めます。
+
+-v ./output:/app/output: 同様に、PC上のoutputフォルダをコンテナ内の/app/outputに接続します。コンテナがCSVファイルを出力すると、PC上のoutputフォルダにそのファイルが作成されます。
+
+access-to-csv: 実行するイメージの名前です。
+
+実行後、PCの output フォルダの中に output.csv が作成されていれば成功です！
+
+4. Linuxサーバーへの移行 🚀
+WindowsでビルドしたイメージをLinuxサーバーへ持っていく方法は主に2つあります。
+
+方法1: Docker Hubなどのレジストリを使う (推奨)
+Windowsで: Docker Hubなどにログインし、イメージをプッシュします。
+
+Bash
+
+docker login
+docker tag access-to-csv yourusername/access-to-csv:latest
+docker push yourusername/access-to-csv:latest
+Linuxサーバーで: イメージをプルして実行します。
+
+Bash
+
+docker pull yourusername/access-to-csv:latest
+# `docker run` コマンドはWindowsの時と全く同じ！
+docker run --rm -v ./data:/app/data -v ./output:/app/output yourusername/access-to-csv:latest
+方法2: イメージをファイルとして保存・ロードする
+Windowsで: イメージを.tarファイルとして保存します。
+
+Bash
+
+docker save -o access-to-csv.tar access-to-csv
+access-to-csv.tar ファイルをSCPなどでLinuxサーバーに転送します。
+
+Linuxサーバーで: .tarファイルからイメージをロードします。
+
+Bash
+
+docker load -i access-to-csv.tar
+# `docker run` コマンドはWindowsの時と全く同じ！
+docker run --rm -v ./data:/app/data -v ./output:/app/output access-to-csv
+この方法により、開発環境と実行環境の違いをDockerが吸収してくれるため、スムーズな移行が可能です。

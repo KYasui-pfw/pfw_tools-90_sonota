@@ -1,0 +1,3 @@
+(sqlite3.OperationalError) no such column: ’ •[Ží•ÊNo
+[SQL: select ’ •[Ží•ÊNo,’ •[–¼ from report_type_table]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)

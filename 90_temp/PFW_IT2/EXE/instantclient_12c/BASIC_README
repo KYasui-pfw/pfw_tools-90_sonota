@@ -1,0 +1,16 @@
+Basic Package Information 
+========================= 
+Mon Feb 13 19:39:46 CST 2017
+Client Shared Library 32-bit - 12.2.0.1.0
+
+Windows NT Version V6.2  
+ORACLE_HOME =  C:\ADE\aime_517381\oracle
+Node name           : ADC01JAF
+CPU                 : 4 - type 586, 4 Physical Cores
+Process Affinity    : 0x0x00000000
+Memory (Avail/Total): Ph:10840M/16383M, Ph+PgF:13243M/18815M, VA:18
+Operating in ORACLE_HOME environment.
+
+Small timezone file = timezone_26.dat
+Large timezone file = timezlrg_26.dat
+

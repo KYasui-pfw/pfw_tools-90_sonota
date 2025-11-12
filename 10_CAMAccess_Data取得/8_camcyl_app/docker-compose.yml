@@ -37,3 +37,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+    # Dockerネットワーク（FastAPI/NiceGUIと同じネットワーク）
+    networks:
+      - default
+
+networks:
+  default:
+    name: app-shared-net
+    external: true

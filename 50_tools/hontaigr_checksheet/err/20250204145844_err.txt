@@ -1,0 +1,1 @@
+"None of [Index(['組立番号', '機種名', 'インチ', 'ゲージ', '年', '月', '次'], dtype='object')] are in the [columns]"

@@ -20,19 +20,24 @@ def cleanup_old_logs(log_dir, days_to_keep=7):
         log_files = glob.glob(log_pattern)
         cutoff_date = datetime.now() - timedelta(days=days_to_keep)
         deleted_count = 0
-        
+
         for log_file in log_files:
-            file_time = datetime.fromtimestamp(os.path.getctime(log_file))
-            if file_time < cutoff_date:
-                os.remove(log_file)
-                print(f"古いログファイル {os.path.basename(log_file)} を削除しました (作成日: {file_time.strftime('%Y-%m-%d')})")
-                deleted_count += 1
-        
+            # ファイル名から日付を抽出（log_YYYYMMDD.txt形式）
+            import re
+            match = re.search(r'log_(\d{8})\.txt$', log_file)
+            if match:
+                file_date_str = match.group(1)
+                file_date = datetime.strptime(file_date_str, '%Y%m%d')
+                if file_date < cutoff_date:
+                    os.remove(log_file)
+                    print(f"古いログファイル {os.path.basename(log_file)} を削除しました (日付: {file_date.strftime('%Y-%m-%d')})")
+                    deleted_count += 1
+
         if deleted_count == 0:
             print(f"削除対象のログファイルはありません (保持期間: {days_to_keep}日)")
         else:
             print(f"{deleted_count}個のログファイルを削除しました")
-            
+
     except Exception as e:
         print(f"ログファイル削除エラー: {e}")
 

@@ -1,0 +1,1 @@
+Message: Cannot locate option with value: 100; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#no-such-element-exception

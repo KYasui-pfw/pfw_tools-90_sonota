@@ -416,7 +416,7 @@ class DatabaseManager:
                     result.get('ej_delivery_date'),
                     result.get('ej_vend_cd'),
                     result.get('rbom_order_no'),
-                    result.get('rbom_line_no'),
+                    int(result.get('rbom_line_no')) if pd.notna(result.get('rbom_line_no')) else None,  # 整数に変換
                     result.get('rbom_item_code'),
                     result.get('rbom_item_name'),
                     result.get('rbom_quantity'),
@@ -494,7 +494,7 @@ class DatabaseManager:
                 clean_data.get('ej_delivery_date'),
                 clean_data.get('ej_vend_cd'),
                 clean_data.get('rbom_order_no'),
-                clean_data.get('rbom_line_no'),
+                int(clean_data.get('rbom_line_no')) if pd.notna(clean_data.get('rbom_line_no')) else None,  # 整数に変換
                 clean_data.get('rbom_item_code'),
                 clean_data.get('rbom_item_name'),
                 clean_data.get('rbom_quantity'),

@@ -1,0 +1,1 @@
+"None of [Index(['SIC4', 'SIC6', 'SIC7', 'SIC8', 'SIC1', 'SIC2', 'SIC3'], dtype='object')] are in the [columns]"

@@ -60,15 +60,17 @@ def copy_accdb_file(source_path, dest_dir):
         return None
 
 
-def extract_table_to_csv(db_path, table_name, output_dir, output_prefix):
+def extract_table_to_csv(db_path, table_name, output_dir, output_prefix, job_table_name=None):
     """
     Access DBからテーブルを抽出してCSV出力
+    job_table_nameが指定されている場合、LEFT JOINを実行
 
     Args:
         db_path (str): Access DBファイルパス
         table_name (str): 抽出するテーブル名
         output_dir (str): 出力先ディレクトリ
         output_prefix (str): 出力ファイル名プレフィックス
+        job_table_name (str, optional): ジョブテーブル名（指定時はLEFT JOIN実行）
 
     Returns:
         bool: 成功したらTrue
@@ -93,7 +95,18 @@ def extract_table_to_csv(db_path, table_name, output_dir, output_prefix):
         conn = jaydebeapi.connect(driver, conn_str, {}, jars=classpath)
 
         # テーブルからデータを取得
-        query = f'SELECT * FROM [{table_name}]'
+        if job_table_name:
+            # LEFT JOINを実行（KaLstCyl_All.KUMITATENO_Job = ジョブ.lotCode）
+            query = f'''
+                SELECT t1.*, t2.*
+                FROM [{table_name}] AS t1
+                LEFT JOIN [{job_table_name}] AS t2
+                ON t1.KUMITATENO_Job = t2.lotCode
+            '''
+            logger.info(f"  ジョブテーブル '{job_table_name}' とLEFT JOINを実行中...")
+        else:
+            query = f'SELECT * FROM [{table_name}]'
+
         df = pd.read_sql_query(query, conn)
 
         # 出力先ディレクトリが存在しない場合は作成
@@ -133,6 +146,7 @@ def main():
     accdb_source2 = os.getenv('ACCDB_SOURCE2')
     table1_name = os.getenv('TABLE1_NAME', 'KaLstCyl_All')
     table2_name = os.getenv('TABLE2_NAME', 'CAMFIN_LOG_ALL')
+    job_table_name = os.getenv('JOB_TABLE_NAME', 'ジョブ')  # LEFT JOIN用のジョブテーブル名
     output_prefix1 = os.getenv('OUTPUT_PREFIX1', 'Cyl_pfw_table')
     output_prefix2 = os.getenv('OUTPUT_PREFIX2', 'EJデータマスター')
     output_dir = os.getenv('OUTPUT_DIR_JISSEKI', '/app/output/KakouJisseki')
@@ -149,12 +163,14 @@ def main():
         {
             'source': accdb_source1,
             'table_name': table1_name,
-            'output_prefix': output_prefix1
+            'output_prefix': output_prefix1,
+            'job_table_name': job_table_name  # KaLstCyl_AllとジョブテーブルをLEFT JOIN
         },
         {
             'source': accdb_source2,
             'table_name': table2_name,
-            'output_prefix': output_prefix2
+            'output_prefix': output_prefix2,
+            'job_table_name': None  # CAMFIN_LOG_ALLはJOINなし
         }
     ]
 
@@ -166,18 +182,49 @@ def main():
         source_path = db_info['source']
         table_name = db_info['table_name']
         output_prefix = db_info['output_prefix']
+        job_table_name = db_info.get('job_table_name', None)  # ジョブテーブル名を取得
 
         logger.info(f"[{idx}/{len(databases)}] データベースに接続しています: {os.path.basename(source_path)}")
 
-        # ステップ1: Access DBファイルをコピー
-        db_path = copy_accdb_file(source_path, data_dir)
-        if not db_path:
-            error_count += 1
-            logger.info("")
-            continue
+        # ステップ1: Access DBファイルをコピー（★テスト用ファイル使用時はスキップ★）
+        source_filename = os.path.basename(source_path)
 
-        # ステップ2: テーブルを抽出してCSV出力
-        result = extract_table_to_csv(db_path, table_name, output_dir, output_prefix)
+        # ★テスト用: 対象のaccdbファイルに対応する_test.accdbが存在する場合は優先使用★
+        if source_filename == 'Cyl_pfw_table.accdb':
+            test_file = os.path.join(data_dir, 'Cyl_pfw_table_test.accdb')
+            if os.path.exists(test_file):
+                logger.info(f"  ★ テストモード: 既存のテストファイルを使用します: {os.path.basename(test_file)}")
+                db_path = test_file
+            else:
+                logger.warning(f"  テストファイルが見つかりません: {test_file}")
+                logger.info(f"  通常モード: ソースファイルをコピーします")
+                db_path = copy_accdb_file(source_path, data_dir)
+                if not db_path:
+                    error_count += 1
+                    logger.info("")
+                    continue
+        elif source_filename == 'EJデータマスター.accdb':
+            test_file = os.path.join(data_dir, 'EJデータマスター_test.accdb')
+            if os.path.exists(test_file):
+                logger.info(f"  ★ テストモード: 既存のテストファイルを使用します: {os.path.basename(test_file)}")
+                db_path = test_file
+            else:
+                logger.warning(f"  テストファイルが見つかりません: {test_file}")
+                logger.info(f"  通常モード: ソースファイルをコピーします")
+                db_path = copy_accdb_file(source_path, data_dir)
+                if not db_path:
+                    error_count += 1
+                    logger.info("")
+                    continue
+        else:
+            db_path = copy_accdb_file(source_path, data_dir)
+            if not db_path:
+                error_count += 1
+                logger.info("")
+                continue
+
+        # ステップ2: テーブルを抽出してCSV出力（job_table_nameが指定されている場合はLEFT JOIN）
+        result = extract_table_to_csv(db_path, table_name, output_dir, output_prefix, job_table_name)
 
         if result:
             success_count += 1

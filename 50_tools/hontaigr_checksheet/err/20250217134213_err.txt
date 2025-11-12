@@ -1,0 +1,3 @@
+(sqlite3.DatabaseError) file is not a database
+[SQL: select * from production_machine_info where (”N = '2025' and  ('03' = '' or ŒŽ = '03' ) and ('' = '' or ŽŸ = '' )) ]
+(Background on this error at: https://sqlalche.me/e/20/4xp6)

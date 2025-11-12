@@ -202,6 +202,7 @@ class MappingEngine:
                                                          ej_m_sequence=ej_current_sequence,
                                                          rbom_m_sequence=rbom_current_sequence)
                     result['is_manual_mapping'] = True  # 手動マッピングフラグ
+                    result['status'] = '手'  # 手動マッピングは"手"
                     mapping_results.append(result)
                     logger.debug(f"  手動マッピング適用: EJ={ej_order_no}(連番{ej_current_sequence}) ↔ rBOM={rbom_order_no}+{rbom_line_no}(連番{rbom_current_sequence}), 数量={mapping_qty}")
 
@@ -250,6 +251,7 @@ class MappingEngine:
 
                     result = self._create_mapping_result(ej_series, rbom_series, '自動')
                     result['is_manual_mapping'] = True  # 手動マッピングフラグ
+                    result['status'] = '手'  # 手動マッピングは"手"
                     mapping_results.append(result)
                     logger.debug(f"  手動マッピング適用: EJ={ej_order_no} ↔ rBOM={rbom_order_no}+{rbom_line_no}, is_manual_mapping={result.get('is_manual_mapping')}")
 
@@ -927,6 +929,12 @@ class MappingEngine:
             'rbom_m_sequence': rbom_m_sequence
         }
 
+        # statusの設定（マッピング状態に応じて設定）
+        if ej_row is not None and rbom_row is not None:
+            result['status'] = '済'  # 両方存在 = 標準マッピング成功
+        else:
+            result['status'] = '未'  # 片方のみ = 未マッチ
+
         # 統一品目コード（マッピング時はEJ/rBOM共通、未マッピング時は存在する側の品目コード）
         item_code = None
         if ej_row is not None and rbom_row is not None:
@@ -1015,6 +1023,9 @@ class MappingEngine:
             # item_codeが保存されていない場合はej_item_codeまたはrbom_item_codeから取得
             item_code = fixed_row.get('ej_item_code') or fixed_row.get('rbom_item_code')
 
+        # statusの設定（固定マッピングは元のstatusを保持、なければ'済'）
+        status = fixed_row.get('status', '済')
+
         result = {
             'item_code': item_code,
             'ej_order_no': fixed_row.get('ej_order_no'),
@@ -1035,6 +1046,7 @@ class MappingEngine:
             'rbom_ktcd': fixed_row.get('rbom_ktcd'),
             'rbom_srcd': fixed_row.get('rbom_srcd'),
             'mk020_note': fixed_row.get('mk020_note'),
+            'status': status,  # 固定マッピングは元のstatusを保持
             'mapping_type': mapping_type,
             'is_fixed': True  # 固定マッピングは常に固定
         }
