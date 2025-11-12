@@ -55,6 +55,8 @@ class MailSender:
                 subject = "【rBOM】受入実績登録エラー通知"
             elif function_name == "棚出機能":
                 subject = "【rBOM】棚出実績登録エラー通知"
+            elif function_name == "経費工具受入機能":
+                subject = "【rBOM】経費工具受入通知"
             else:
                 subject = self.mail_subject  # デフォルト
 
