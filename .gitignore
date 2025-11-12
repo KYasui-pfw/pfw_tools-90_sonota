@@ -218,3 +218,6 @@ database/DB_backup/
 # Temporary image files
 err*.png
 test*.png
+
+# Microsoft Access database files
+*.accdb
