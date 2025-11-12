@@ -120,6 +120,10 @@ class MailSender:
 
         # 経費工具受入機能の場合は異なるテンプレートを使用
         if function_name == "経費工具受入機能":
+            # 発注社員情報を取得
+            order_tancd = record_info.get("order_tancd", "-")
+            order_employee_name = record_info.get("order_employee_name", "-")
+
             body = f"""
 経費工具発注品の受入が行われましたので、通知いたします。
 
@@ -132,7 +136,8 @@ class MailSender:
 受入数: {hmcd}
 品目名: {hmnm}
 登録日時: {instdt}
-更新社員: {iptancd} ({employee_name_detail})
+受入社員: {iptancd} ({employee_name_detail})
+発注社員: {order_tancd} ({order_employee_name})
 
 ※このメールは自動送信されています。
 ※ご不明な点がございましたら、システム管理者までお問い合わせください。

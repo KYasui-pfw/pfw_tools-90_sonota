@@ -570,16 +570,45 @@ class ErrorMonitor:
             except Exception as e:
                 logger.warning(f"[経費工具受入] 仕入先名取得エラー: SRCD={srcd}, {e}")
 
-        # メール送信先を取得（TO/CC）
-        to_emails = self.db_manager.get_recipients(employee_code, "expense_tool", "TO")
-        cc_emails = self.db_manager.get_recipients(employee_code, "expense_tool", "CC")
+        # D3330から発注担当者コード（TANCD）を取得
+        order_employee_code = ""
+        order_employee_name = "-"
+        try:
+            d3330_payload = {
+                "table": "D3330",
+                "columns": ["TANCD"],
+                "where": {"PONO": pono}
+            }
+            d3330_response = requests.post(self.api_url, json=d3330_payload, headers=self.headers, timeout=30)
+            d3330_response.raise_for_status()
+            d3330_data = d3330_response.json()
+            d3330_rows = d3330_data.get("rows", [])
+            if d3330_rows:
+                order_employee_code = d3330_rows[0].get("TANCD", "")
+                # 発注担当者の社員情報を取得
+                if order_employee_code:
+                    order_employee = self.db_manager.get_employee_by_tancd(order_employee_code)
+                    if order_employee:
+                        order_employee_name = order_employee.get("tannm") or order_employee_code
+                    else:
+                        order_employee_name = order_employee_code
+        except Exception as e:
+            logger.warning(f"[経費工具受入] D3330からTANCD取得エラー: PONO={pono}, {e}")
+
+        if not order_employee_code:
+            logger.warning(f"[経費工具受入] レコードID {record_id}: 発注担当者コード（D3330.TANCD）が見つかりません")
+            return
+
+        # メール送信先を取得（発注担当者に送信）
+        to_emails = self.db_manager.get_recipients(order_employee_code, "expense_tool", "TO")
+        cc_emails = self.db_manager.get_recipients(order_employee_code, "expense_tool", "CC")
 
         # メールアドレスのリストを抽出
         to_addresses = [r["email_address"] for r in to_emails]
         cc_addresses = [r["email_address"] for r in cc_emails]
 
         if not to_addresses and not cc_addresses:
-            logger.warning(f"[経費工具受入] レコードID {record_id}: 社員コード {employee_code} のメール送信先が設定されていません")
+            logger.warning(f"[経費工具受入] レコードID {record_id}: 発注社員コード {order_employee_code} のメール送信先が設定されていません")
 
             # 登録日時をフォーマット
             instdt_formatted = self._format_datetime(instdt)
@@ -588,8 +617,8 @@ class ErrorMonitor:
             self.db_manager.add_mail_history(
                 table_name="DK020_EXPENSE_TOOL",
                 record_id=record_id,
-                employee_code=employee_code,
-                employee_name=employee_name,
+                employee_code=order_employee_code,
+                employee_name=order_employee_name,
                 to_addresses=["（送信先未設定）"],
                 cc_addresses=[],
                 function_name="経費工具受入機能",
@@ -605,7 +634,7 @@ class ErrorMonitor:
             logger.info(f"[経費工具受入] レコードID {record_id}: 送信先未設定として履歴を記録しました")
             return
 
-        logger.info(f"[経費工具受入] レコードID {record_id}: {employee_name} にメールを送信します（TO={to_addresses}, CC={cc_addresses}）")
+        logger.info(f"[経費工具受入] レコードID {record_id}: {order_employee_name} にメールを送信します（TO={to_addresses}, CC={cc_addresses}）")
 
         # 登録日時をフォーマット
         instdt_formatted = self._format_datetime(instdt)
@@ -617,8 +646,10 @@ class ErrorMonitor:
             "order_label": "発注番号",
             "line_no": polineno,
             "instdt": instdt_formatted,
-            "iptancd": employee_code,
-            "employee_name": employee_name,
+            "iptancd": employee_code,  # 受入社員コード
+            "employee_name": employee_name,  # 受入社員名
+            "order_tancd": order_employee_code,  # 発注社員コード
+            "order_employee_name": order_employee_name,  # 発注社員名
             "listno": f"{srcd} ({vendor_name})",  # 仕入先コード (仕入先名)
             "hmcd": str(record.get("RCVQTY", "-")),  # 受入数
             "hmnm": detail.get("HMNM", "-")
@@ -630,14 +661,14 @@ class ErrorMonitor:
         }
 
         # メール送信
-        if self.mail_sender.send_error_notification(to_addresses, cc_addresses, employee_name, error_data):
+        if self.mail_sender.send_error_notification(to_addresses, cc_addresses, order_employee_name, error_data):
             # 送信履歴を記録
             error_detail_summary = f"経費工具受入機能 - {pono} / {polineno}"
             self.db_manager.add_mail_history(
                 table_name="DK020_EXPENSE_TOOL",
                 record_id=record_id,
-                employee_code=employee_code,
-                employee_name=employee_name,
+                employee_code=order_employee_code,
+                employee_name=order_employee_name,
                 to_addresses=to_addresses,
                 cc_addresses=cc_addresses,
                 function_name="経費工具受入機能",
