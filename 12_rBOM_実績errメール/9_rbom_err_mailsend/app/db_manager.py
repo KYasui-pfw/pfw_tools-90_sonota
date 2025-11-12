@@ -147,7 +147,8 @@ class DatabaseManager:
 
         result = {
             "acceptance": {"TO": [], "CC": []},
-            "picking": {"TO": [], "CC": []}
+            "picking": {"TO": [], "CC": []},
+            "expense_tool": {"TO": [], "CC": []}
         }
 
         for row in rows:
