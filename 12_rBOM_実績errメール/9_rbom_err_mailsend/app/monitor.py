@@ -475,14 +475,15 @@ class ErrorMonitor:
                 if not pono or not polineno:
                     continue
 
-                # D3340からSEINOと仕入先を含む詳細情報を取得
+                # D3340からSEINOと品目情報を取得
+                # 注: SRCDはD3340には存在しないため、後でD3330から取得する
                 detail_payload = {
                     "table": "D3340",
-                    "columns": ["SEINO", "HMNM", "SRCD"],
+                    "columns": ["SEINO", "HMNM"],
                     "where": {
                         "and": [
                             {"PONO": pono},
-                            {"LINENO": polineno}
+                            {"LINENO": int(polineno) if isinstance(polineno, str) else polineno}
                         ]
                     }
                 }
@@ -551,8 +552,36 @@ class ErrorMonitor:
 
         employee_name = employee.get("tannm") or employee_code
 
+        # D3330から発注担当者コード（TANCD）と仕入先コード（SRCD）を取得
+        order_employee_code = ""
+        order_employee_name = "-"
+        srcd = ""
+        try:
+            d3330_payload = {
+                "table": "D3330",
+                "columns": ["TANCD", "SRCD"],
+                "where": {"PONO": pono}
+            }
+            d3330_response = requests.post(self.api_url, json=d3330_payload, headers=self.headers, timeout=30)
+            d3330_response.raise_for_status()
+            d3330_data = d3330_response.json()
+            d3330_rows = d3330_data.get("rows", [])
+            if d3330_rows:
+                d3330_rec = d3330_rows[0]
+                order_employee_code = d3330_rec.get("TANCD", "")
+                srcd = d3330_rec.get("SRCD", "")
+
+                # 発注担当者の社員情報を取得
+                if order_employee_code:
+                    order_employee = self.db_manager.get_employee_by_tancd(order_employee_code)
+                    if order_employee:
+                        order_employee_name = order_employee.get("tannm") or order_employee_code
+                    else:
+                        order_employee_name = order_employee_code
+        except Exception as e:
+            logger.warning(f"[経費工具受入] D3330からTANCD/SRCD取得エラー: PONO={pono}, {e}")
+
         # 仕入先名を取得
-        srcd = detail.get("SRCD", "")
         vendor_name = "-"
         if srcd:
             try:
@@ -569,31 +598,6 @@ class ErrorMonitor:
                     vendor_name = vendor_rows[0].get("HTRNM1", "-")
             except Exception as e:
                 logger.warning(f"[経費工具受入] 仕入先名取得エラー: SRCD={srcd}, {e}")
-
-        # D3330から発注担当者コード（TANCD）を取得
-        order_employee_code = ""
-        order_employee_name = "-"
-        try:
-            d3330_payload = {
-                "table": "D3330",
-                "columns": ["TANCD"],
-                "where": {"PONO": pono}
-            }
-            d3330_response = requests.post(self.api_url, json=d3330_payload, headers=self.headers, timeout=30)
-            d3330_response.raise_for_status()
-            d3330_data = d3330_response.json()
-            d3330_rows = d3330_data.get("rows", [])
-            if d3330_rows:
-                order_employee_code = d3330_rows[0].get("TANCD", "")
-                # 発注担当者の社員情報を取得
-                if order_employee_code:
-                    order_employee = self.db_manager.get_employee_by_tancd(order_employee_code)
-                    if order_employee:
-                        order_employee_name = order_employee.get("tannm") or order_employee_code
-                    else:
-                        order_employee_name = order_employee_code
-        except Exception as e:
-            logger.warning(f"[経費工具受入] D3330からTANCD取得エラー: PONO={pono}, {e}")
 
         if not order_employee_code:
             logger.warning(f"[経費工具受入] レコードID {record_id}: 発注担当者コード（D3330.TANCD）が見つかりません")

@@ -49,20 +49,24 @@ class MailSender:
             # メール本文を作成
             body = self._create_mail_body(employee_name, error_data)
 
-            # 機能名から件名を決定
+            # 機能名から件名と送信者名を決定
             function_name = error_data.get("function_name", "")
             if function_name == "受入機能":
                 subject = "【rBOM】受入実績登録エラー通知"
+                from_name = self.mail_from_name  # デフォルト（rBOMエラー通知）
             elif function_name == "棚出機能":
                 subject = "【rBOM】棚出実績登録エラー通知"
+                from_name = self.mail_from_name  # デフォルト（rBOMエラー通知）
             elif function_name == "経費工具受入機能":
                 subject = "【rBOM】経費工具受入通知"
+                from_name = "rBOMメール通知"  # 経費工具専用
             else:
                 subject = self.mail_subject  # デフォルト
+                from_name = self.mail_from_name  # デフォルト
 
             # MIMEメッセージを作成
             msg = MIMEMultipart()
-            msg["From"] = formataddr((self.mail_from_name, self.mail_from))
+            msg["From"] = formataddr((from_name, self.mail_from))
 
             # TO/CCを設定
             if to_emails:
