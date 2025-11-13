@@ -132,11 +132,24 @@ with tab1:
 
         col1, col_space, col2, col3, col4 = st.columns([2, 1, 1, 1, 1])
         with col1:
+            # session_stateで選択状態を保持
+            if 'error_selected_label' not in st.session_state:
+                st.session_state.error_selected_label = ""
+
+            # 現在の選択状態からindexを取得
+            current_index = 0
+            if st.session_state.error_selected_label in employee_options_with_default:
+                current_index = list(employee_options_with_default.keys()).index(st.session_state.error_selected_label)
+
             selected_label = st.selectbox(
                 "送信先を設定する社員を選択（入力で検索可能）",
                 list(employee_options_with_default.keys()),
-                index=0  # 初期値を空欄に
+                index=current_index,
+                key="error_selectbox"
             )
+
+            # 選択状態を保存
+            st.session_state.error_selected_label = selected_label
 
         selected_tancd = employee_options_with_default[selected_label]
 
@@ -304,12 +317,24 @@ with tab2:
 
         col1, col_space, col2, col3, col4 = st.columns([2, 1, 1, 1, 1])
         with col1:
+            # session_stateで選択状態を保持
+            if 'expense_selected_label' not in st.session_state:
+                st.session_state.expense_selected_label = ""
+
+            # 現在の選択状態からindexを取得
+            current_index = 0
+            if st.session_state.expense_selected_label in employee_options_with_default:
+                current_index = list(employee_options_with_default.keys()).index(st.session_state.expense_selected_label)
+
             selected_label = st.selectbox(
                 "送信先を設定する社員を選択（入力で検索可能）",
                 list(employee_options_with_default.keys()),
-                index=0,  # 初期値を空欄に
+                index=current_index,
                 key="expense_tool_selectbox"
             )
+
+            # 選択状態を保存
+            st.session_state.expense_selected_label = selected_label
 
         selected_tancd = employee_options_with_default[selected_label]
 
