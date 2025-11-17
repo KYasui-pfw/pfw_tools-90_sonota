@@ -37,7 +37,8 @@ class DatabaseManager:
     
     def get_connection(self):
         """データベース接続を取得（オートコミット無効・明示的トランザクション管理）"""
-        conn = sqlite3.connect(self.db_path)
+        # タイムアウトを30秒に設定（デフォルトは5秒）
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         # オートコミットを明示的に無効化（デフォルトでは無効だが確実にするため）
         conn.isolation_level = 'DEFERRED'
         return conn
@@ -653,19 +654,22 @@ class DatabaseManager:
 
                         cursor.execute("""
                             INSERT OR REPLACE INTO fixed_mappings (
-                                ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date,
+                                ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date, ej_vend_cd,
                                 rbom_order_no, rbom_line_no, rbom_item_code, rbom_item_name,
-                                rbom_quantity, rbom_delivery_date, rbom_seino,
+                                rbom_quantity, rbom_delivery_date, rbom_seino, rbom_ktcd, rbom_srcd, mk020_note,
                                 ej_m_sequence, rbom_m_sequence, status
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             clean_data.get('ej_order_no'), clean_data.get('ej_item_code'),
                             clean_data.get('ej_item_name'), clean_data.get('ej_quantity'),
                             clean_data.get('ej_status'), clean_data.get('ej_purch_odr_typ'), clean_data.get('ej_delivery_date'),
+                            clean_data.get('ej_vend_cd'),
                             clean_data.get('rbom_order_no'), clean_data.get('rbom_line_no'),
                             clean_data.get('rbom_item_code'), clean_data.get('rbom_item_name'),
                             clean_data.get('rbom_quantity'), clean_data.get('rbom_delivery_date'),
-                            clean_data.get('rbom_seino'), ej_m_seq, rbom_m_seq, ''
+                            clean_data.get('rbom_seino'), clean_data.get('rbom_ktcd'), clean_data.get('rbom_srcd'),
+                            clean_data.get('mk020_note'),
+                            ej_m_seq, rbom_m_seq, ''
                         ))
                         insert_count += 1
                     else:

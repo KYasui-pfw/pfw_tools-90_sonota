@@ -55,6 +55,13 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
 
     data['result'] = data.apply(determine_result, axis=1)
 
+    # 固定データを保存（表示変換前）
+    fixed_data_original = data[data['is_fixed'].isin([True, 1, '1', 1.0])].copy() if 'is_fixed' in data.columns else pd.DataFrame()
+
+    # is_fixed列を○/空欄に変換
+    if 'is_fixed' in data.columns:
+        data['is_fixed'] = data['is_fixed'].apply(lambda x: '○' if x in [True, 1, '1', 1.0] else '')
+
     # rBOM発注番号+行番号の連結列を作成
     if 'rbom_order_no' in data.columns and 'rbom_line_no' in data.columns:
         data['rbom_order_line'] = data.apply(
@@ -80,6 +87,11 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
     if 'result' in data.columns:
         column_order.append('result')
         display_columns['result'] = '結果'
+
+    # 固定列
+    if 'is_fixed' in data.columns:
+        column_order.append('is_fixed')
+        display_columns['is_fixed'] = '固定'
 
     # EJグループ
     if 'ej_order_no' in data.columns:
@@ -170,7 +182,96 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
         height=400,
         hide_index=True,
     )
-    
+
+    # 固定マッピング管理セクション
+    if not fixed_data_original.empty:
+        st.markdown("---")
+        st.subheader(f"📌 固定マッピング管理 ({len(fixed_data_original)}件)")
+
+        # 検索とボタンのレイアウト
+        search_col, btn_col1 = st.columns([3, 1])
+
+        with search_col:
+            search_ej_order = st.text_input(
+                "EJ発注番号で検索",
+                key="search_ej_order",
+                placeholder="EJ発注番号を入力してください",
+                help="部分一致検索に対応しています"
+            )
+
+        with btn_col1:
+            st.write("")  # スペース調整
+            if st.button("全固定解除", type="secondary", key="unfix_all_btn"):
+                # 全固定解除の確認
+                if 'confirm_unfix_all' not in st.session_state:
+                    st.session_state.confirm_unfix_all = True
+                    st.rerun()
+
+        # 全固定解除の確認ダイアログ
+        if st.session_state.get('confirm_unfix_all', False):
+            st.warning(f"⚠️ 固定されている全{len(fixed_data_original)}件のマッピングを解除しますか？")
+            confirm_col1, confirm_col2, confirm_col3 = st.columns([1, 1, 4])
+            with confirm_col1:
+                if st.button("はい、解除する", key="confirm_yes", type="primary"):
+                    # 全件解除
+                    if 'unfix_target' not in st.session_state:
+                        st.session_state.unfix_target = []
+                    for _, row in fixed_data_original.iterrows():
+                        st.session_state.unfix_target.append({
+                            'ej_order_no': row.get('ej_order_no', ''),
+                            'rbom_order_no': row.get('rbom_order_no', ''),
+                            'rbom_line_no': row.get('rbom_line_no', '')
+                        })
+                    del st.session_state.confirm_unfix_all
+                    st.rerun()
+            with confirm_col2:
+                if st.button("キャンセル", key="confirm_no"):
+                    del st.session_state.confirm_unfix_all
+                    st.rerun()
+
+        # 検索フィルタリング（検索欄が空の場合は何も表示しない）
+        if search_ej_order:
+            filtered_fixed = fixed_data_original[
+                fixed_data_original['ej_order_no'].astype(str).str.contains(search_ej_order, case=False, na=False)
+            ]
+
+            st.caption(f"表示件数: {len(filtered_fixed)}件")
+
+            # 検索結果を表示
+            if not filtered_fixed.empty:
+                for idx, row in filtered_fixed.iterrows():
+                    ej_order_no = row.get('ej_order_no', '')
+                    rbom_order_no = row.get('rbom_order_no', '')
+                    rbom_line_no = row.get('rbom_line_no', '')
+                    item_code = row.get('item_code', '')
+                    status = row.get('status', '')
+
+                    # rBOM発注番号+行番号の表示
+                    if pd.notna(rbom_order_no) and pd.notna(rbom_line_no):
+                        rbom_display = f"{str(rbom_order_no).zfill(9)}+{str(int(rbom_line_no)).zfill(3)}"
+                    else:
+                        rbom_display = "N/A"
+
+                    # 行ごとに情報と解除ボタンを表示
+                    col_info, col_btn = st.columns([5, 1])
+                    with col_info:
+                        st.text(f"品目: {item_code} | EJ: {ej_order_no} | rBOM: {rbom_display} | 状態: {status}")
+                    with col_btn:
+                        # 一意なキーを生成
+                        button_key = f"unfix_{ej_order_no}_{rbom_order_no}_{rbom_line_no}_{idx}"
+                        if st.button("解除", key=button_key, type="secondary"):
+                            # セッション状態に解除対象を保存
+                            if 'unfix_target' not in st.session_state:
+                                st.session_state.unfix_target = []
+                            st.session_state.unfix_target.append({
+                                'ej_order_no': ej_order_no,
+                                'rbom_order_no': rbom_order_no,
+                                'rbom_line_no': rbom_line_no
+                            })
+                            st.rerun()
+            else:
+                st.info("検索条件に一致する固定マッピングがありません。")
+
     # データ統計情報とCSV出力
     col1, col2, col3 = st.columns([1, 1, 5])
 
@@ -203,6 +304,11 @@ def render_main_grid(data: pd.DataFrame, stats: dict = None):
             if 'result' in data.columns:
                 csv_column_order.append('result')
                 csv_display_columns['result'] = '結果'
+
+            # 固定列
+            if 'is_fixed' in data.columns:
+                csv_column_order.append('is_fixed')
+                csv_display_columns['is_fixed'] = '固定'
 
             # EJグループ（全項目を含む）
             if 'ej_order_no' in data.columns:

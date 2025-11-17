@@ -175,7 +175,7 @@ def render_mapping_list_page():
     end_date = date(2027, 1, 31)
 
     # 納期許容日数の入力と自動マッピングボタン
-    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1.5])
+    col1, col2, col3, col4, col5 = st.columns([1, 1, 0.75, 1.5, 1])
 
     with col1:
         ej_after_rbom_days = st.number_input(
@@ -218,7 +218,12 @@ def render_mapping_list_page():
 
     with col4:
         st.write("")  # スペース調整
-        auto_mapping_btn = st.button("自動マッピング", type="primary")
+        # 2つのボタンを横に並べる
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            auto_mapping_btn = st.button("自動マッピング", type="primary", key="auto_mapping_btn")
+        with btn_col2:
+            fix_completed_btn = st.button("マッピング済固定", key="fix_completed_btn")
 
     with col5:
         # 前回実行時刻を2段表示
@@ -326,21 +331,21 @@ def render_mapping_list_page():
             logger.info(f"納期範囲: {start_date} 〜 {end_date}")
             print(f"[DEBUG] 確認完了 - 実際の処理を開始")
 
-            # データベースバックアップ（処理開始前）
-            logger.info("【ステップ0】データベースバックアップ開始")
-            backup_start_time = datetime.now()
-            backup_success = backup_database()
-            backup_elapsed = (datetime.now() - backup_start_time).total_seconds()
-
-            if not backup_success:
-                st.warning("データベースのバックアップに失敗しましたが、処理を続行します。")
-                logger.warning(f"データベースバックアップ失敗 ({backup_elapsed:.2f}秒)")
-            else:
-                logger.info(f"データベースバックアップ完了 ({backup_elapsed:.2f}秒)")
-
             # 確認後の実際の処理
-            with st.spinner("データを取得中..."):
+            with st.spinner("自動マッピング処理を実行中..."):
                 try:
+                    # 0. データベースバックアップ（処理開始前）
+                    logger.info("【ステップ0】データベースバックアップ開始")
+                    backup_start_time = datetime.now()
+                    backup_success = backup_database()
+                    backup_elapsed = (datetime.now() - backup_start_time).total_seconds()
+
+                    if not backup_success:
+                        st.warning("データベースのバックアップに失敗しましたが、処理を続行します。")
+                        logger.warning(f"データベースバックアップ失敗 ({backup_elapsed:.2f}秒)")
+                    else:
+                        logger.info(f"データベースバックアップ完了 ({backup_elapsed:.2f}秒)")
+
                     # 1. EJデータ取得
                     logger.info("【ステップ1】EJデータ取得開始")
                     start_time = datetime.now()
@@ -464,7 +469,174 @@ def render_mapping_list_page():
                     # エラー時も確認状態を削除
                     if 'auto_mapping_confirmed' in st.session_state:
                         del st.session_state.auto_mapping_confirmed
-    
+
+    # マッピング済固定ボタンの処理
+    if fix_completed_btn:
+        # 確認ダイアログを表示
+        if 'confirm_fix_completed' not in st.session_state:
+            st.session_state.confirm_fix_completed = True
+            st.rerun()
+
+    # マッピング済固定の確認ダイアログ
+    if st.session_state.get('confirm_fix_completed', False):
+        # 対象件数を取得
+        if 'db_manager' in st.session_state:
+            mapping_data_raw = st.session_state.db_manager.get_mapping_results()
+            if not mapping_data_raw.empty:
+                # デバッグログ：is_fixedの値の分布を確認
+                logger.info("=" * 80)
+                logger.info("is_fixedカラムのデバッグ情報")
+                logger.info(f"データ型: {mapping_data_raw['is_fixed'].dtype}")
+                logger.info(f"ユニーク値: {mapping_data_raw['is_fixed'].unique()}")
+                logger.info(f"値のカウント:\n{mapping_data_raw['is_fixed'].value_counts(dropna=False)}")
+
+                # ステータス別のis_fixed分布
+                status_済_count = len(mapping_data_raw[mapping_data_raw['status'] == '済'])
+                status_済2_count = len(mapping_data_raw[mapping_data_raw['status'] == '済2'])
+                logger.info(f"ステータス '済': {status_済_count}件")
+                logger.info(f"ステータス '済2': {status_済2_count}件")
+
+                # is_fixedが0または空の件数（整数型対応）
+                target_data = mapping_data_raw[
+                    (mapping_data_raw['status'].isin(['済', '済2'])) &
+                    ((mapping_data_raw['is_fixed'] == 0) | (mapping_data_raw['is_fixed'].isna()))
+                ]
+                target_count = len(target_data)
+
+                logger.info(f"固定対象データ（is_fixed=0またはNA）: {target_count}件")
+                logger.info("=" * 80)
+            else:
+                target_count = 0
+        else:
+            target_count = 0
+
+        if target_count > 0:
+            st.warning(f"⚠️ ステータスが「済」「済2」の未固定マッピング {target_count}件を固定しますか？")
+            st.caption("※固定されたマッピングは次回の自動マッピング実行時に除外され、そのまま維持されます。")
+
+            confirm_col1, confirm_col2, confirm_col3 = st.columns([1, 1, 4])
+            with confirm_col1:
+                if st.button("はい、固定する", key="confirm_fix_yes", type="primary"):
+                    with st.spinner('固定処理を実行中...'):
+                        logger.info("=" * 80)
+                        logger.info("マッピング済固定処理を開始")
+
+                        try:
+                            mapping_data_raw = st.session_state.db_manager.get_mapping_results()
+                            target_data = mapping_data_raw[
+                                (mapping_data_raw['status'].isin(['済', '済2'])) &
+                                ((mapping_data_raw['is_fixed'] == 0) | (mapping_data_raw['is_fixed'].isna()))
+                            ]
+
+                            logger.info(f"固定対象データ: {len(target_data)}件")
+
+                            # 一括更新用のリストを作成
+                            updates = []
+                            for _, row in target_data.iterrows():
+                                # mapping_dataを辞書形式で準備
+                                mapping_data_dict = row.to_dict()
+
+                                ej_order_no = row.get('ej_order_no')
+                                rbom_order_no = row.get('rbom_order_no')
+                                rbom_line_no = row.get('rbom_line_no')
+
+                                # rbom_line_noを整数に変換
+                                if pd.notna(rbom_line_no):
+                                    try:
+                                        rbom_line_no = int(rbom_line_no)
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"rbom_line_no変換エラー: {rbom_line_no}")
+                                        continue
+
+                                updates.append((
+                                    ej_order_no,
+                                    rbom_order_no,
+                                    rbom_line_no,
+                                    True,  # is_fixed=True
+                                    mapping_data_dict
+                                ))
+
+                            if updates:
+                                # 一括固定処理を実行
+                                st.session_state.db_manager.bulk_update_fixed_and_save_mappings(updates)
+                                st.success(f"{len(updates)}件のマッピングを固定しました。")
+                                logger.info(f"マッピング済固定処理完了: {len(updates)}件")
+                                del st.session_state.confirm_fix_completed
+                                st.rerun()
+                            else:
+                                st.warning("固定可能なデータがありませんでした。")
+                                del st.session_state.confirm_fix_completed
+
+                        except Exception as e:
+                            logger.error(f"マッピング済固定処理エラー: {str(e)}", exc_info=True)
+                            st.error(f"エラーが発生しました: {str(e)}")
+                            if 'confirm_fix_completed' in st.session_state:
+                                del st.session_state.confirm_fix_completed
+
+                        logger.info("=" * 80)
+
+            with confirm_col2:
+                if st.button("キャンセル", key="confirm_fix_no"):
+                    del st.session_state.confirm_fix_completed
+                    st.rerun()
+        else:
+            st.info("固定対象のマッピングデータがありません。（全て固定済みまたはマッピング未完了）")
+            if 'confirm_fix_completed' in st.session_state:
+                del st.session_state.confirm_fix_completed
+                st.rerun()
+
+    # 固定解除処理（render_main_gridからの要求）
+    if 'unfix_target' in st.session_state and st.session_state.unfix_target:
+        with st.spinner('固定解除処理を実行中...'):
+            logger.info("=" * 80)
+            logger.info("固定解除処理を開始")
+
+            try:
+                unfix_targets = st.session_state.unfix_target
+                logger.info(f"解除対象: {len(unfix_targets)}件")
+
+                # 一括解除処理
+                updates = []
+                for target in unfix_targets:
+                    ej_order_no = target['ej_order_no']
+                    rbom_order_no = target['rbom_order_no']
+                    rbom_line_no = target['rbom_line_no']
+
+                    # rbom_line_noを整数に変換
+                    if pd.notna(rbom_line_no):
+                        try:
+                            rbom_line_no = int(rbom_line_no)
+                        except (ValueError, TypeError):
+                            logger.warning(f"rbom_line_no変換エラー: {rbom_line_no}")
+                            continue
+
+                    # mapping_dataは空でOK（解除時は使用しない）
+                    updates.append((
+                        ej_order_no,
+                        rbom_order_no,
+                        rbom_line_no,
+                        False,  # is_fixed=False（解除）
+                        {}  # mapping_data（解除時は不要）
+                    ))
+
+                if updates:
+                    st.session_state.db_manager.bulk_update_fixed_and_save_mappings(updates)
+                    st.success(f"{len(updates)}件の固定を解除しました。")
+                    logger.info(f"固定解除処理完了: {len(updates)}件")
+
+                # セッション状態をクリア
+                del st.session_state.unfix_target
+                st.rerun()
+
+            except Exception as e:
+                logger.error(f"固定解除処理エラー: {str(e)}", exc_info=True)
+                st.error(f"エラーが発生しました: {str(e)}")
+                # エラー時もセッション状態をクリア
+                if 'unfix_target' in st.session_state:
+                    del st.session_state.unfix_target
+
+            logger.info("=" * 80)
+
     if 'db_manager' in st.session_state and st.session_state.db_manager:
         mapping_data_raw = st.session_state.db_manager.get_mapping_results()
 
