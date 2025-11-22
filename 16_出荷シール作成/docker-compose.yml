@@ -1,0 +1,19 @@
+services:
+  # 出荷シール作成アプリ
+  seal-maker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8508:8508"
+    volumes:
+      - .:/app  # アプリケーションコード
+      - /mnt/esrv06/帳票開発:/app/network/帳票開発:ro  # 入力データ読み取り用
+    container_name: seal-maker-app
+    restart: unless-stopped
+    networks:
+      - app-shared-net
+
+networks:
+  app-shared-net:
+    external: true
