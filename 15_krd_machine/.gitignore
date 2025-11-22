@@ -1,0 +1,24 @@
+# 環境変数ファイル
+.env
+
+# データベース
+db/*.db
+db/*.db-journal
+
+# ログファイル
+logs/*.log
+logs/*.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# バックアップファイル
+*.bak
+*.backup
+
+# OS
+.DS_Store
+Thumbs.db

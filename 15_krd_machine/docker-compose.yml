@@ -1,0 +1,30 @@
+services:
+  krd-sync-app:
+    build: .
+    container_name: krd-sync-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # ローカルディレクトリ（SQLiteデータベースとログ）
+      - ./db:/app/db
+      - ./logs:/app/logs
+
+    # ホスト名解決の設定（KRD MySQLサーバー）
+    extra_hosts:
+      - "krd:172.29.167.101"
+
+    # ログ設定
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # ヘルスチェック
+    healthcheck:
+      test: ["CMD", "pgrep", "cron"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
