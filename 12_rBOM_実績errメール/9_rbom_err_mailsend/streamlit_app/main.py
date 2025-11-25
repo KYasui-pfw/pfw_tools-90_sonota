@@ -104,6 +104,54 @@ if 'synced' not in st.session_state:
             st.session_state.synced = True
             st.toast(f"社員マスタを同期しました（{count}件）", icon="✅")
 
+            # ===== 1度きりの一括CC追加処理（使用時はコメント解除、使用後は再度コメントアウト）=====
+            # # 全社員の受入機能と棚出機能のCCにuedah@pfw.co.jpを一括追加
+            # if 'bulk_cc_added' not in st.session_state:
+            #     with st.spinner("全社員にCCを一括追加中..."):
+            #         target_email = "uedah@pfw.co.jp"
+            #         employees_list = db.get_all_employees(include_inactive=False)
+            #         # 例外処理: 社員コードが#または*の1文字のみの場合は除外
+            #         employees_list = [emp for emp in employees_list if emp['tancd'] not in ['#', '*']]
+            #
+            #         success_count = 0
+            #         skip_count = 0
+            #
+            #         for emp in employees_list:
+            #             tancd = emp['tancd']
+            #
+            #             # 受入機能のCC追加
+            #             current_recipients = db.get_all_recipients_by_tancd(tancd)
+            #             acceptance_cc = current_recipients["acceptance"]["CC"]
+            #
+            #             if target_email not in acceptance_cc:
+            #                 # CCの末尾に追加（既存のCC + 新規CC）
+            #                 acceptance_cc.append(target_email)
+            #                 try:
+            #                     db.bulk_update_recipients(tancd, "acceptance", "CC", acceptance_cc)
+            #                     success_count += 1
+            #                 except Exception as e:
+            #                     skip_count += 1
+            #             else:
+            #                 skip_count += 1
+            #
+            #             # 棚出機能のCC追加
+            #             picking_cc = current_recipients["picking"]["CC"]
+            #
+            #             if target_email not in picking_cc:
+            #                 # CCの末尾に追加（既存のCC + 新規CC）
+            #                 picking_cc.append(target_email)
+            #                 try:
+            #                     db.bulk_update_recipients(tancd, "picking", "CC", picking_cc)
+            #                     success_count += 1
+            #                 except Exception as e:
+            #                     skip_count += 1
+            #             else:
+            #                 skip_count += 1
+            #
+            #         st.session_state.bulk_cc_added = True
+            #         st.toast(f"CC一括追加完了: {success_count}件追加、{skip_count}件スキップ", icon="✅")
+            # ===== 1度きりの一括CC追加処理ここまで =====
+
 # タブで機能を分割
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "⚠️ エラーメール送信先設定",

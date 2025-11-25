@@ -22,10 +22,10 @@ echo "[並列実行] 処理1（rBOM CSV）と処理2（Access DB）を開始し�
 echo ""
 
 # 処理1: rBOM CSVコピー・加工 ★一時停止中★
-# python "$SCRIPT_DIR/process1.py" &
-# PID1=$!
-echo "[処理1] 一時停止中（スキップ）"
-PID1=0
+python "$SCRIPT_DIR/process1.py" &
+PID1=$!
+#echo "[処理1] 一時停止中（スキップ）"
+#PID1=0
 EXIT_CODE1=0
 
 # 処理2: Access DB → CSV抽出

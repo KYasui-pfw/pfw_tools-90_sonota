@@ -111,7 +111,7 @@ The mapping engine processes data in **two rounds** with strict exclusion logic:
 
 ### Key Business Rules
 
-- **Date Restriction**: All data extraction limited to delivery dates ≥ 2025-07-01 (hard-coded constraint)
+- **Date Restriction**: All data extraction limited to delivery dates ≥ 2025-11-01 (hard-coded constraint)
 - **EJ Filtering**: Filter `PUCH_ODR_STS_TYP = 2` and `PUCH_ODR_TYP != 4`
 - **Mapping Strategy**: Two-round system:
   - **Round 1**: Exact `item_code + quantity` match with delivery date tolerance (status='済')
@@ -401,6 +401,34 @@ RBOM_API_TOKEN=oG5^Ls%#20yq
 - Fixed mappings excluded from auto-mapping source data by design
 
 ## Recent Changes and Bug Fixes
+
+### 2025-11-17 Updates
+
+**Fixed Mapping Feature Improvements**:
+- Fixed is_fixed filtering logic to work with SQLite integer storage (0/1 instead of False/True)
+- Added comprehensive debug logging for is_fixed column value distribution analysis
+- Increased SQLite connection timeout from 5 to 30 seconds to prevent "database is locked" errors
+- Added spinner visual feedback for all long-running operations:
+  - マッピング済固定 (Fix Completed Mappings)
+  - 全固定解除 (Bulk Unfix All)
+  - 固定解除 (Individual Unfix)
+  - 自動マッピング (Auto-mapping)
+- Improved fixed mapping search UI: only display results when search field has input (empty search = no display)
+- Removed 100-record display limit for fixed mapping search results (now shows all results)
+
+**Critical Implementation Notes**:
+- **is_fixed Filtering Pattern** (発注残マッピングリスト.py lines 486-507):
+  ```python
+  # SQLite stores BOOLEAN as 0/1 integers
+  target_data = mapping_data_raw[
+      (mapping_data_raw['status'].isin(['済', '済2'])) &
+      ((mapping_data_raw['is_fixed'] == 0) | (mapping_data_raw['is_fixed'].isna()))
+  ]
+  ```
+- **Database Timeout Configuration** (db_manager.py line 41):
+  ```python
+  conn = sqlite3.connect(self.db_path, timeout=30.0)
+  ```
 
 ### 2025-10-30 Updates
 

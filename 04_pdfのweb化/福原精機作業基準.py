@@ -11,12 +11,12 @@ import fitz  # PyMuPDF
 ROOT_DIR_PATH_STR = r"/app/network/kijyun"
 PAGE_TITLE = "福原精機作業基準"
 
-# 表示用のタブ名リスト (英文字2文字と発行台帳・配布票の後ろに全角スペース)
+# 表示用のタブ名リスト (英文字2文字と発行台帳・一覧表の後ろに全角スペース)
 TAB_NAMES_FOR_DISPLAY = ["EA　", "EC　", "EG　", "EI　",
-                         "EK　", "EM　", "ES　", "EW　", "発行台帳　", "配布票　"]
+                         "EK　", "EM　", "ES　", "EW　", "発行台帳　", "一覧表　"]
 # 内部ロジックで使用するタブ名リスト (スペースなし)
 TAB_NAMES_FOR_LOGIC = ["EA", "EC", "EG", "EI",
-                       "EK", "EM", "ES", "EW", "発行台帳", "配布票"]
+                       "EK", "EM", "ES", "EW", "発行台帳", "一覧表"]
 
 KIJUN_CHECK_HYO_PARENT_FOLDER_NAME = "基準チェック表 FS-　ーＰＤＦー"  # ルートフォルダ直下のこの名前のフォルダ
 
@@ -187,12 +187,12 @@ for i, tab_name_for_display in enumerate(TAB_NAMES_FOR_DISPLAY):
             else:
                 st.info(f"「発行台帳」関連のPDFファイルが見つかりませんでした。")
 
-        elif actual_tab_name == "配布票":
-            latest_pdf = find_latest_pdf_with_keyword(root_dir, "配布票")
+        elif actual_tab_name == "一覧表":
+            latest_pdf = find_latest_pdf_with_keyword(root_dir, "一覧表")
             if latest_pdf:
                 display_pdf(latest_pdf)
             else:
-                st.info(f"「配布票」関連のPDFファイルが見つかりませんでした。")
+                st.info(f"「一覧表」関連のPDFファイルが見つかりませんでした。")
 
         elif actual_tab_name in ["EA", "EC", "EG", "EI", "EK", "EM", "ES", "EW"]:
             model_specific_folder_parent = root_dir / KIJUN_CHECK_HYO_PARENT_FOLDER_NAME

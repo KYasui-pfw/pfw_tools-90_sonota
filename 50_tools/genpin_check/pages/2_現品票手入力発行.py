@@ -23,28 +23,41 @@ try:
   pythoncom.CoInitialize() #サーバーサイドからローカルファイルを動かすときに必要
 
 
-  #krdのmachinDBに接続する
+  # krdのmachinDBに接続する（SQLite版）
   @st.cache_resource
   def krd_data_get(sql):
-    # #DB接続定義
-    db_url = 'mysql+pymysql://pfw:mejiriHoo@krd/machin?charset=utf8'
+    # SQLite接続（KRD MySQL → SQLite同期データベース）
+    # \\esrv11\krd_machine\db\krd_machine.db
+    sqlite_db_path = r'\\esrv11\krd_machine\db\krd_machine.db'
 
-    # エンジンを作成
-    engine = create_engine(db_url, echo=True)
+    conn = sqlite3.connect(sqlite_db_path)
+    df = pd.read_sql(sql, conn)
+    conn.close()
 
-    # セッションを作成するためのSessionクラスを生成
-    Session = sessionmaker(bind=engine)
-    session = Session()
+    return df
 
-    # コネクションを取得
-    with engine.connect() as connection:
-      # SQLクエリの実行
-      df = pd.read_sql(sql, connection)
-
-    # セッションを閉じる
-    session.close()   
-
-    return(df)
+  # # 【旧版：MySQL接続】コメントアウト（2025-11-22 SQLite移行）
+  # @st.cache_resource
+  # def krd_data_get(sql):
+  #   # #DB接続定義
+  #   db_url = 'mysql+pymysql://pfw:mejiriHoo@krd/machin?charset=utf8'
+  #
+  #   # エンジンを作成
+  #   engine = create_engine(db_url, echo=True)
+  #
+  #   # セッションを作成するためのSessionクラスを生成
+  #   Session = sessionmaker(bind=engine)
+  #   session = Session()
+  #
+  #   # コネクションを取得
+  #   with engine.connect() as connection:
+  #     # SQLクエリの実行
+  #     df = pd.read_sql(sql, connection)
+  #
+  #   # セッションを閉じる
+  #   session.close()
+  #
+  #   return(df)
   
   @st.cache_resource
   def ireporter_data_get(sql):

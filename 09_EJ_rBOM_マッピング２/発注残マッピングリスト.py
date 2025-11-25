@@ -171,7 +171,7 @@ def render_mapping_list_page():
     """発注残マッピングリスト画面"""
 
     # 固定の日付範囲
-    start_date = date(2025, 7, 1)
+    start_date = date(2025, 11, 1)
     end_date = date(2027, 1, 31)
 
     # 納期許容日数の入力と自動マッピングボタン

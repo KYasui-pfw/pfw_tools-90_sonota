@@ -21,21 +21,24 @@ mkdir -p "$LOG_DIR"
 echo "[並列実行] 処理1（rBOM CSV）と処理2（Access DB）を開始します..."
 echo ""
 
-# 処理1: rBOM CSVコピー・加工
-python "$SCRIPT_DIR/process1.py" &
-PID1=$!
+# 処理1: rBOM CSVコピー・加工 ★一時停止中★
+# python "$SCRIPT_DIR/process1.py" &
+# PID1=$!
+echo "[処理1] 一時停止中（スキップ）"
+PID1=0
+EXIT_CODE1=0
 
 # 処理2: Access DB → CSV抽出
 python "$SCRIPT_DIR/process2.py" &
 PID2=$!
 
 # 両方の処理が完了するまで待機
-echo "処理1 (PID: $PID1) 実行中..."
+# echo "処理1 (PID: $PID1) 実行中..."
 echo "処理2 (PID: $PID2) 実行中..."
 echo ""
 
-wait $PID1
-EXIT_CODE1=$?
+# wait $PID1
+# EXIT_CODE1=$?
 
 wait $PID2
 EXIT_CODE2=$?
@@ -46,11 +49,12 @@ echo "======================================================"
 echo "処理1・2完了"
 echo "======================================================"
 
-if [ $EXIT_CODE1 -eq 0 ]; then
-    echo "[処理1] 成功"
-else
-    echo "[処理1] 失敗 (Exit Code: $EXIT_CODE1)"
-fi
+# if [ $EXIT_CODE1 -eq 0 ]; then
+#     echo "[処理1] 成功"
+# else
+#     echo "[処理1] 失敗 (Exit Code: $EXIT_CODE1)"
+# fi
+echo "[処理1] 一時停止中（スキップ）"
 
 if [ $EXIT_CODE2 -eq 0 ]; then
     echo "[処理2] 成功"

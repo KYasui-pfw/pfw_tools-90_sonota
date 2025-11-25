@@ -1,0 +1,16 @@
+> C:\Dev\90_tools\14_lot番号マッピング に簡単なデータマッピングツールを作成します。画面はstreamlitで作成します。一度にすべての機能は作成しません
+  - dbの中にsqliteでデータベースを作成して、以下のデータを取得して蓄積してください。
+    - esrv10のpostgresからデータを取得します。データ取得のための接続情報は、C:\Dev\90_tools\13_machine\rbom_sendを参考にしてください。
+     - "C:\Dev\90_tools\14_lot番号マッピング\document\public.view_report_334.md"と"C:\Dev\90_tools\14_lot番号マッピング\document\public.view_report_405.md"にテーブル定義があります。この2つのテーブルからデータを取得します。
+    - view_report_405からは、cluster_1_2_tをas"ロット番号"、cluster_1_3_tをas"品目コード"、cluster_1_5_tをas"組立番号"、cluster_1_4_tをas"月次"で取得してください。月次はYYYYMMXとなっており、最後の一文字は文字列の可能性がありますが、先頭6文字はYYYYとMMとなります。これを2025年11月以降のデータを取得するようにしてください。
+    - view_report_334からは、cluster_1_0_tをas"ロット番号"、cluster_1_3_tをas"品目コード"、cluster_1_4_tをas"組立番号"、cluster_1_2_tをas"月次"で取得してください。月次はYYYYMMXとなっており、最後の一文字は文字列の可能性がありますが、先頭6文字はYYYYとMMとなります。これを2025年11月以降のデータを取得するようにしてください。
+  - この2つは同じ項目になると思いますので、縦に結合してください。そしてテーブルを作成してください。テーブル名はなんでもOKです。
+  - 以後、streamlitの画面を開くたびにに処理が走り、追加するデータがあったらINSERTされていくイメージです
+  - streamlitの画面には、一先ずそのテーブルのデータフレームを表示してください。
+
+## 指示２
+ - straemlitの画面を開くたびに、以下の処理を追加してください。
+"- \\esrv11\KakouJisseki\Cyl_pfw_table_KaLstCyl_All.csv" と "\\172.17.107.102\PrintOutCsv\4.加工\4-01 CAMKakouDenpyo.csv" の2ファイルをdataフォルダにコピーする。データがある場合は上書きする。
+ - Cyl_pfw_table_KaLstCyl_All.csvからは、DENPYONOを"ロット番号"、SETU_Fをas"品目コード"、KUMITATENOをas"組立番号"、SEISANJIをas"月次"で取得してください。月次はYYMMXとなっており、最後の一文字は文字列の可能性がありますが、先頭4文字はYYとMMとなります。これを25年11月以降のデータを取得するようにしてください。
+
+- 4-01 CAMKakouDenpyo.csvからは、伝票Ｎｏを"ロット番号"、固定文字で"CAM"を"品目コード"、固定文字で"KUMITATE"を"組立番号"、生産月次をas"月次"で取得してください。月次はYYYYMMまたはYYYYMMXとなっており、最後の一文字は文字列の可能性がありますが、先頭6文字はYYYYとMMとなります。これを2025年11月以降のデータを取得するようにしてください。なお、月次が空欄の場合は抽出対象にしてください。

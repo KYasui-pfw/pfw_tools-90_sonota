@@ -52,10 +52,10 @@ class EJConnector:
     
     def get_order_backlog(self, start_date: date, end_date: date) -> List[Dict]:
         """
-        発注残データを取得（2025年7月1日〜2027年1月31日の範囲）
+        発注残データを取得（2025年11月1日〜2027年1月31日の範囲）
 
         Args:
-            start_date: 納期開始日（2025年7月1日以降）
+            start_date: 納期開始日（2025年11月1日以降）
             end_date: 納期終了日（2027年1月31日まで）
 
         Returns:
@@ -64,7 +64,7 @@ class EJConnector:
         logger.info(f"EJデータ取得開始: {start_date} 〜 {end_date}")
 
         # 日付範囲のバリデーション
-        min_date = date(2025, 7, 1)
+        min_date = date(2025, 11, 1)
         max_date = date(2027, 1, 31)
 
         if start_date < min_date:
@@ -104,13 +104,13 @@ class EJConnector:
             LEFT JOIN EXPJ2.M_ITEM m ON t.ITEM_CD = m.ITEM_CD
             WHERE t.PUCH_ODR_STS_TYP = 2
             AND t.PUCH_ODR_TYP != 4
-            AND t.PUCH_ODR_DLV_DATE >= DATE '2025-07-01'
+            AND t.PUCH_ODR_DLV_DATE >= DATE '2025-11-01'
             AND t.PUCH_ODR_DLV_DATE <= DATE '2027-01-31'
             ORDER BY t.PUCH_ODR_CD
         """
         #WHERE t.PUCH_ODR_STS_TYP = 2 1は未発注、
         #AND t.ACPT_CMPLT_DATE IS NULL  -- 受入完了日が空欄のもののみ
-        #AND t.PUCH_ODR_DLV_DATE >= DATE '2025-07-01'  -- 開始日固定条件
+        #AND t.PUCH_ODR_DLV_DATE >= DATE '2025-11-01'  -- 開始日固定条件
         #AND t.PUCH_ODR_DLV_DATE <= DATE '2027-01-31'  -- 終了日固定条件
 
 
@@ -191,17 +191,17 @@ class EJConnector:
                 cursor.execute("SELECT * FROM V$VERSION WHERE ROWNUM = 1")
                 version_info = cursor.fetchone()[0]
                 
-                # 発注残テーブルのレコード数取得（2025/7/1〜2027/1/31）
+                # 発注残テーブルのレコード数取得（2025/11/1〜2027/1/31）
                 cursor.execute("""
                     SELECT COUNT(*) FROM EXPJ2.T_RLSD_PUCH_ODR
-                    WHERE PUCH_ODR_DLV_DATE >= DATE '2025-07-01'
+                    WHERE PUCH_ODR_DLV_DATE >= DATE '2025-11-01'
                     AND PUCH_ODR_DLV_DATE <= DATE '2027-01-31'
                 """)
                 record_count = cursor.fetchone()[0]
 
                 return {
                     'version': version_info,
-                    'record_count_20250701_to_20270131': record_count,
+                    'record_count_20251101_to_20270131': record_count,
                     'connection_string': f"{self.host}:{self.port}/{self.service_name}",
                     'username': self.username
                 }

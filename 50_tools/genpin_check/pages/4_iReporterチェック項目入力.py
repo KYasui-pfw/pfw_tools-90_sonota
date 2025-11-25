@@ -11,28 +11,41 @@ import traceback
 
 try:
 
-  #krdのmachinDBに接続する
+  # krdのmachinDBに接続する（SQLite版）
   @st.cache_resource
   def krd_data_get(sql):
-    # #DB接続定義
-    db_url = 'mysql+pymysql://pfw:mejiriHoo@krd/machin?charset=utf8'
+    # SQLite接続（KRD MySQL → SQLite同期データベース）
+    # \\esrv11\krd_machine\db\krd_machine.db
+    sqlite_db_path = r'\\esrv11\krd_machine\db\krd_machine.db'
 
-    # エンジンを作成
-    engine = create_engine(db_url, echo=True)
+    conn = sqlite3.connect(sqlite_db_path)
+    df = pd.read_sql(sql, conn)
+    conn.close()
 
-    # セッションを作成するためのSessionクラスを生成
-    Session = sessionmaker(bind=engine)
-    session = Session()
+    return df
 
-    # コネクションを取得
-    with engine.connect() as connection:
-      # SQLクエリの実行
-      df = pd.read_sql(sql, connection)
-
-    # セッションを閉じる
-    session.close()   
-
-    return(df)
+  # # 【旧版：MySQL接続】コメントアウト（2025-11-22 SQLite移行）
+  # @st.cache_resource
+  # def krd_data_get(sql):
+  #   # #DB接続定義
+  #   db_url = 'mysql+pymysql://pfw:mejiriHoo@krd/machin?charset=utf8'
+  #
+  #   # エンジンを作成
+  #   engine = create_engine(db_url, echo=True)
+  #
+  #   # セッションを作成するためのSessionクラスを生成
+  #   Session = sessionmaker(bind=engine)
+  #   session = Session()
+  #
+  #   # コネクションを取得
+  #   with engine.connect() as connection:
+  #     # SQLクエリの実行
+  #     df = pd.read_sql(sql, connection)
+  #
+  #   # セッションを閉じる
+  #   session.close()
+  #
+  #   return(df)
 
   #sqlite3への接続
   @st.cache_resource
@@ -309,7 +322,7 @@ try:
       cur.close()
       conn.close()
   def db_update4(edit_df):
-    
+
       #更新処理）
       dbname = 'genpinhyo.db'
       cdb =  os.path.dirname(os.path.dirname(__file__))+f'\\Database\\'+dbname
@@ -333,39 +346,55 @@ try:
         cur.close()
         conn.close()
 
-# セレクトボックス1が変更されたときに他のボックスをリセットする関数
-  # def reset_select2():
-  #   del st.session_state["innum2"]
-  # def reset_select3(nen):
-  #   if "select3" in st.session_state:
-  #     del st.session_state["select3"]
-  #   if 'select3' not in st.session_state:
-  #     st.session_state.select3 = nen
-  # def reset_select4(getsu):
-  #   if "select4" in st.session_state:
-  #     del st.session_state["select4"]
-  #   if 'select4' not in st.session_state:
-  #     st.session_state.select4 = getsu
-  # def change_kirikae_flg(kirikae_flg):
-  #   st.session_state.kirikae_flg += 1
+  #チェック項目削除処理
+  def db_update5(renkeii_id, zumen_ver):
+
+    #checksheetdbバックアップ(最短で１日１回)
+    dt_now = datetime.now(timezone(timedelta(hours=9))) # 日本時刻
+    if(os.path.isfile(os.path.dirname(os.path.dirname(__file__))+'\\Database\\checksheet.db')):
+      shutil.copy(os.path.dirname(os.path.dirname(__file__))+'\\Database\\checksheet.db',
+                  os.path.dirname(os.path.dirname(__file__))+f'\\Database\\backup\\{dt_now.strftime('%Y%m%d')}_checksheet.db')
+
+    #本処理（削除処理）
+    dbname = 'checksheet.db'
+    cdb = os.path.dirname(os.path.dirname(__file__))+f'\\Database\\'+dbname
+    conn = sqlite3.connect(cdb)
+
+    cur = conn.cursor()
+
+    #データベースから物理削除
+    try:
+      cur.execute('''
+          DELETE FROM zubancheck
+          WHERE 連携ID = ? AND 図面Ver = ?
+      ''', (renkeii_id, zumen_ver))
+
+      # すべての削除が完了したらコミット
+      conn.commit()
+    except Exception as e:
+    # エラーが発生した場合、ロールバックして変更を取り消す
+      conn.rollback()
+      print(e)
+    finally:
+    # 最後にカーソルと接続を閉じる
+      cur.close()
+      conn.close()
+
+  # 図番変更時にカウンターをインクリメントする関数
   def update_zuban():
-  #   st.session_state.kirikae_flg += 1
-    st.session_state.pop('innum2',None)
-    st.session_state.pop('select3',None)
-    st.session_state.pop('select4',None)
+    # カウンターをインクリメントして、すべての入力フィールドをリセット
+    st.session_state.select_counter += 1
     
   def main():
     # # セレクトボックスの初期値をセッションステートで管理
-    if 'select1' not in st.session_state:
-      st.session_state.select1 = ''
-    if 'innum2' not in st.session_state:
-      st.session_state.innum2 = 1
-    if 'select3' not in st.session_state:
-      st.session_state.select3 = ''
-    if 'select4' not in st.session_state:
-      st.session_state.select4 = ''
-    if 'kirikae_flg' not in st.session_state:
-      st.session_state.kirikae_flg = 0
+    # カウンター方式：図番変更時にカウントアップして入力フィールドを完全リセット
+    if 'select_counter' not in st.session_state:
+      st.session_state.select_counter = 0
+    if 'delete_confirm' not in st.session_state:
+      st.session_state.delete_confirm = False
+    # タブ状態を保持するためのセッション変数
+    if 'active_tab' not in st.session_state:
+      st.session_state.active_tab = 0
 
     st.set_page_config(
     page_title = 'i-Reporterチェック項目入力',
@@ -471,8 +500,12 @@ try:
     check_df = pd.DataFrame(columns=['完成部番','工程Ver']) 
     check_df.loc[0]=["",""]
 
-    # タブを作成
+    # タブを作成（セッション状態でアクティブタブを保持）
     tab_titles = ['　加工機・図番　登録　', '　チェックシート項目　登録　', '　チェックシートイメージの表示　','　i-Reporter発行対象管理　']
+
+    # タブ選択の検知（ユーザーがタブをクリックした場合の対応）
+    # Streamlitの制限により、タブ選択を直接検知できないため、
+    # ボタン押下時に明示的にactive_tabを設定する方式を採用
     tab1, tab2, tab3, tab4 = st.tabs(tab_titles)
     
     with tab1:      
@@ -585,23 +618,21 @@ try:
 
     #各種計算処理
 
-      #zumensentakuv = sl.selectbox('図番選択',zubansentaku_values,key='select1',on_change=update_zuban)
-
-
       # 図面選択_値変更検知　初期値の設定
       if 'prev_zumensentakuv' not in st.session_state:
           st.session_state['prev_zumensentakuv'] = None  # 前回の値を記録する
       if 'zumensentakuv' not in st.session_state:
           st.session_state['zumensentakuv'] = None  # 現在の選択値を記録する
 
-      st.session_state['zumensentakuv'] = sl.selectbox('図番選択',zubansentaku_values,key='select1')
+      # 図番選択（on_changeは使わない）
+      st.session_state['zumensentakuv'] = sl.selectbox('図番選択',zubansentaku_values)
 
-      # 図面選択_値変更検知
+      # 図面選択_値変更検知（カウンターをインクリメント）
       if st.session_state['zumensentakuv'] != st.session_state['prev_zumensentakuv']:
-   #       st.write(f"図番が変更されました: {st.session_state['zumensentakuv']}")
+          # 値が変更されたらカウンターをインクリメント（次回のUI描画時に新しいkeyが使われる）
+          if st.session_state['prev_zumensentakuv'] is not None:  # 初回は除外
+              update_zuban()
           st.session_state['prev_zumensentakuv'] = st.session_state['zumensentakuv']  # 現在値を前回値に更新
-   #   else:
-   #       st.write("図番は変更されていません。")
 
       # 年月入力欄（年と月であればプルダウンでもよいかもしれない当年前年翌年、１～１２月）
       dt_now = datetime.now(timezone(timedelta(hours=9)))+ timedelta(days=32) # 日本時刻+32日
@@ -613,33 +644,93 @@ try:
       if not merged_df4.empty:
         update_df = merged_df3[merged_df3['完成部番']==merged_df4['完成部番'].iloc[0]] #更新用dataframeはここで取得しておく
         check_df = merged_df4
-        
+
         zubanversion_values = merged_df4['図面Ver'].tolist()
-        zumenv = ni.number_input(f'図面Ver選択　※最新：{str(int(zubanversion_values[-1]))}', min_value=1, max_value=99,value=int(zubanversion_values[-1]) ,step=1,key='innum2')
+
+        # セッション管理: 図面Ver選択
+        session_zumenv_key = f'zumenv_{st.session_state.select_counter}'
+        if session_zumenv_key not in st.session_state:
+          st.session_state[session_zumenv_key] = int(zubanversion_values[-1])
+
+        zumenv = ni.number_input(f'図面Ver選択　※最新：{str(int(zubanversion_values[-1]))}',
+                                  min_value=1, max_value=99,
+                                  value=st.session_state[session_zumenv_key],
+                                  step=1,
+                                  key=f'innum2_{st.session_state.select_counter}')
+        st.session_state[session_zumenv_key] = zumenv
 
         production_start_month = merged_df4.loc[merged_df4['図面Ver'] == zumenv, '生産開始月'].values
-        
+
+        # セッション管理: 開始年と計画月
+        session_nen_key = f'nen_{st.session_state.select_counter}'
+        session_getsu_key = f'getsu_{st.session_state.select_counter}'
+
         if len(production_start_month) != 0 and production_start_month != 'なし':
           dfnen = production_start_month[0][0:4]
-          nen = sb1.selectbox('図面適用生産開始年',nen_list,index=nen_list.index(dfnen),key='select3')
+          if session_nen_key not in st.session_state:
+            st.session_state[session_nen_key] = dfnen
+          nen = sb1.selectbox('図面適用生産開始年',nen_list,
+                              index=nen_list.index(st.session_state[session_nen_key]) if st.session_state[session_nen_key] in nen_list else 0,
+                              key=f'select3_{st.session_state.select_counter}')
+          st.session_state[session_nen_key] = nen
 
           dfgetsu = production_start_month[0][-5:-3] if production_start_month[0][-5:-3] in tuki_list else ""
-          getsu = sb2.selectbox('図面適用生産計画月',tuki_list,index=tuki_list.index(str(dfgetsu)),key='select4')
+          if session_getsu_key not in st.session_state:
+            st.session_state[session_getsu_key] = str(dfgetsu)
+          getsu = sb2.selectbox('図面適用生産計画月',tuki_list,
+                                index=tuki_list.index(st.session_state[session_getsu_key]) if st.session_state[session_getsu_key] in tuki_list else 0,
+                                key=f'select4_{st.session_state.select_counter}')
+          st.session_state[session_getsu_key] = getsu
         else:
-          nen = sb1.selectbox('図面適用生産開始年',nen_list,index=0,key='select3')
-          getsu = sb2.selectbox('図面適用生産計画月',tuki_list,index=0,key='select4')
+          if session_nen_key not in st.session_state:
+            st.session_state[session_nen_key] = ""
+          if session_getsu_key not in st.session_state:
+            st.session_state[session_getsu_key] = ""
+          nen = sb1.selectbox('図面適用生産開始年',nen_list,
+                              index=nen_list.index(st.session_state[session_nen_key]) if st.session_state[session_nen_key] in nen_list else 0,
+                              key=f'select3_{st.session_state.select_counter}')
+          st.session_state[session_nen_key] = nen
+          getsu = sb2.selectbox('図面適用生産計画月',tuki_list,
+                                index=tuki_list.index(st.session_state[session_getsu_key]) if st.session_state[session_getsu_key] in tuki_list else 0,
+                                key=f'select4_{st.session_state.select_counter}')
+          st.session_state[session_getsu_key] = getsu
 
         kouteijun = merged_df4['工程順'].iloc[0]
         kouteijun_sub = merged_df4['工程順SUB'].iloc[0]
 
       else:
-        zumenv = ni.number_input(f'図面Ver選択　※最新：なし', min_value=1, max_value=99,value=1 ,step=1,key='innum2')
+        # セッション管理: 図面Ver選択（空の場合）
+        session_zumenv_key = f'zumenv_{st.session_state.select_counter}'
+        if session_zumenv_key not in st.session_state:
+          st.session_state[session_zumenv_key] = 1
+
+        zumenv = ni.number_input(f'図面Ver選択　※最新：なし',
+                                  min_value=1, max_value=99,
+                                  value=st.session_state[session_zumenv_key],
+                                  step=1,
+                                  key=f'innum2_{st.session_state.select_counter}')
+        st.session_state[session_zumenv_key] = zumenv
+
         production_start_month = 'なし'
-        nen = sb1.selectbox('図面適用生産開始年',nen_list,index=0,key='select3')
-        getsu = sb2.selectbox('図面適用生産計画月',tuki_list,index=0,key='select4')
+
+        # セッション管理: 開始年と計画月（空の場合）
+        session_nen_key = f'nen_{st.session_state.select_counter}'
+        session_getsu_key = f'getsu_{st.session_state.select_counter}'
+        if session_nen_key not in st.session_state:
+          st.session_state[session_nen_key] = ""
+        if session_getsu_key not in st.session_state:
+          st.session_state[session_getsu_key] = ""
+
+        nen = sb1.selectbox('図面適用生産開始年',nen_list,index=0,key=f'select3_{st.session_state.select_counter}')
+        st.session_state[session_nen_key] = nen
+        getsu = sb2.selectbox('図面適用生産計画月',tuki_list,index=0,key=f'select4_{st.session_state.select_counter}')
+        st.session_state[session_getsu_key] = getsu
         kouteijun = 1
 
       nengetsu = f'{nen}年{getsu}月より'
+
+      # merged_df5を初期化（削除ボタンで使用するため）
+      merged_df5 = pd.DataFrame()
 
       if st.session_state['zumensentakuv'] != "" and str(zumenv) !="":
         #図面verで取得
@@ -698,11 +789,21 @@ try:
 
           edited_merged_zubancheckdf = de.data_editor(merged_zubancheckdf.drop(columns=['CID','連携ID','図面Ver','生産開始月','工程順','工程順SUB']),
                                     column_config={
-                                    'チェック項目': {"sortable": False,'width': 300}, 
+                                    'チェック項目': {"sortable": False,'width': 300},
                                     'チェック基準': {'width': 300,"sortable": False}
-                                    },hide_index=True)
-          bt = st.empty()
-          if bt.button("チェック項目更新"):
+                                    },hide_index=True,key=f'data_editor_{st.session_state.select_counter}')
+
+          # ボタンを横並びに配置
+          colbt1, colbt2, colbt3 = st.columns([1, 1, 4])
+
+          with colbt1:
+            btn_update = st.button("チェック項目更新")
+
+          with colbt2:
+            btn_delete = st.button("チェック項目削除", type="secondary")
+
+          # チェック項目更新の処理
+          if btn_update:
             if nen == "" or getsu == "":
               st.write("図面適用生産開始年と図面適用生産開始月は入力必須です！")
             else:
@@ -756,15 +857,58 @@ try:
               #db_update2(df_kouteizuban) #加工機も更新する（矛盾データを作らないため）DEL_20250123_未使用フラグ追加のため
               db_update2(df_kouteizuban_d) #加工機も更新する（矛盾データを作らないため）ADD_20250123_未使用フラグ追加のため
               db_update3(update_df)
-              st.write("更新完了　チェックシートイメージをご確認ください")
-              ni.empty() #■　解決できないため残す
-              sb1.empty() #■
-              sb2.empty() #■
-              de.empty() #■
-              bt.empty() #■
-              #st.session_state.pop('innum2',None)
-              #st.session_state.pop('select3',None)
-              #st.session_state.pop('select4',None)
+              st.success("✓ 更新完了　チェックシートイメージをご確認ください")
+              # カウンターをインクリメントして入力フィールドをリセット
+              st.session_state.select_counter += 1
+              # タブ状態を「チェックシート項目　登録」（タブ1）に設定
+              st.session_state.active_tab = 1
+              # st.rerun()  # コメントアウト：セッションカウントアップのみでリセット
+
+          # チェック項目削除の処理
+          if btn_delete:
+            # 削除対象が存在するかチェック
+            if not merged_df5.empty:
+              if not st.session_state.delete_confirm:
+                st.session_state.delete_confirm = True
+                # タブ状態を「チェックシート項目　登録」（タブ1）に設定
+                st.session_state.active_tab = 1
+                # st.rerun()  # コメントアウト：セッションカウントアップのみでリセット
+            else:
+              st.error("❌ 削除対象のチェック項目が存在しません。図面Verが登録されていない可能性があります。")
+
+          # 削除確認メッセージと実行ボタン
+          if st.session_state.delete_confirm and not merged_df5.empty:
+            st.warning(f"⚠️ 以下のチェック項目を削除します。本当によろしいですか？\n\n図番選択: {st.session_state['zumensentakuv']}\n\n図面Ver: {zumenv}")
+            colconf1, colconf2, colconf3 = st.columns([1, 1, 4])
+
+            with colconf1:
+              if st.button("はい、削除します", type="primary", key=f"confirm_delete_{st.session_state.select_counter}"):
+                # 削除実行
+                renkeii_id = merged_df4['連携ID'].iloc[0]
+                # キャッシュクリア
+                st.cache_resource.clear()
+                # DB更新処理
+                db_update2(df_kouteizuban_d)  # 加工機も更新する
+                db_update5(renkeii_id, zumenv)  # チェック項目削除
+                # 削除成功メッセージ
+                st.success("✓ 削除完了")
+                # セッション状態をクリアして初期化
+                st.session_state.delete_confirm = False
+                # 図番選択関連のセッション状態をクリア
+                st.session_state.pop('zumensentakuv', None)
+                st.session_state.pop('prev_zumensentakuv', None)
+                # カウンターをインクリメントして入力フィールドをリセット
+                st.session_state.select_counter += 1
+                # タブ状態を「チェックシート項目　登録」（タブ1）に設定
+                st.session_state.active_tab = 1
+                # st.rerun()  # コメントアウト：セッションカウントアップのみでリセット
+
+            with colconf2:
+              if st.button("キャンセル", key=f"cancel_delete_{st.session_state.select_counter}"):
+                st.session_state.delete_confirm = False
+                # タブ状態を「チェックシート項目　登録」（タブ1）に設定
+                st.session_state.active_tab = 1
+                # st.rerun()  # コメントアウト：セッションカウントアップのみでリセット
       else:
         st.write("図番と図面Verを選択してください")
 

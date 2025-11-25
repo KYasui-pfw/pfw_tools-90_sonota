@@ -23,11 +23,38 @@ try:
     pythoncom.CoInitialize()  # サーバーサイドからローカルファイルを動かすときに必要
 
     def df_csv_cnv(df, filename):
-        # DFをcsvにコンバートして出力
+        # DataFrameをSQLite genpinhyo.db の output_history テーブルに保存
         dt_now = datetime.now(timezone(timedelta(hours=9)))  # 日本時刻
-        csv_name = os.path.dirname(
-            __file__)+"\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_"+filename+".csv"
-        df.to_csv(csv_name, index=False, encoding='CP932')
+        db_path = os.path.join(os.path.dirname(__file__), 'Database', 'genpinhyo.db')
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # output_history テーブルを作成（存在しない場合）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS output_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+        ''')
+
+        # DataFrameをJSON形式に変換して保存
+        import json
+        data_json = df.to_json(orient='records', force_ascii=False)
+
+        cursor.execute('''
+            INSERT INTO output_history (created_at, filename, data)
+            VALUES (?, ?, ?)
+        ''', (dt_now.strftime('%Y-%m-%d %H:%M:%S'), filename, data_json))
+
+        conn.commit()
+        conn.close()
+
+        # # 【旧版：CSV出力】コメントアウト（2025-11-22 SQLite移行）
+        # csv_name = os.path.dirname(__file__)+"\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_"+filename+".csv"
+        # df.to_csv(csv_name, index=False, encoding='CP932')
 
     # ireporterDB
     def ireporter_data_get(sql):
@@ -52,27 +79,39 @@ try:
 
         return (df)
 
-    # krdのmachinDBに接続する
+    # krdのmachinDBに接続する（SQLite版）
     def krd_data_get(sql):
-        # #DB接続定義
-        db_url = 'mysql+pymysql://pfw:mejiriHoo@krd/machin?charset=utf8'
+        # SQLite接続（KRD MySQL → SQLite同期データベース）
+        # \\esrv11\krd_machine\db\krd_machine.db
+        sqlite_db_path = r'\\esrv11\krd_machine\db\krd_machine.db'
 
-        # エンジンを作成
-        engine = create_engine(db_url, echo=True)
+        conn = sqlite3.connect(sqlite_db_path)
+        df = pd.read_sql(sql, conn)
+        conn.close()
 
-        # セッションを作成するためのSessionクラスを生成
-        Session = sessionmaker(bind=engine)
-        session = Session()
+        return df
 
-        # コネクションを取得
-        with engine.connect() as connection:
-            # SQLクエリの実行
-            df = pd.read_sql(sql, connection)
-
-        # セッションを閉じる
-        session.close()
-
-        return (df)
+    # # 【旧版：MySQL接続】コメントアウト（2025-11-22 SQLite移行）
+    # def krd_data_get(sql):
+    #     # #DB接続定義
+    #     db_url = 'mysql+pymysql://pfw:mejiriHoo@krd/machin?charset=utf8'
+    #
+    #     # エンジンを作成
+    #     engine = create_engine(db_url, echo=True)
+    #
+    #     # セッションを作成するためのSessionクラスを生成
+    #     Session = sessionmaker(bind=engine)
+    #     session = Session()
+    #
+    #     # コネクションを取得
+    #     with engine.connect() as connection:
+    #         # SQLクエリの実行
+    #         df = pd.read_sql(sql, connection)
+    #
+    #     # セッションを閉じる
+    #     session.close()
+    #
+    #     return (df)
 
     def db_update():
 
@@ -485,11 +524,38 @@ try:
 
     # df⇒csv（使わない）
     def df_csv_cnv(df, filename):
-        # DFをcsvにコンバートして出力
+        # DataFrameをSQLite genpinhyo.db の output_history テーブルに保存
         dt_now = datetime.now(timezone(timedelta(hours=9)))  # 日本時刻
-        csv_name = os.path.dirname(
-            __file__)+"\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_"+filename+".csv"
-        df.to_csv(csv_name, index=False, encoding='CP932')
+        db_path = os.path.join(os.path.dirname(__file__), 'Database', 'genpinhyo.db')
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # output_history テーブルを作成（存在しない場合）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS output_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+        ''')
+
+        # DataFrameをJSON形式に変換して保存
+        import json
+        data_json = df.to_json(orient='records', force_ascii=False)
+
+        cursor.execute('''
+            INSERT INTO output_history (created_at, filename, data)
+            VALUES (?, ?, ?)
+        ''', (dt_now.strftime('%Y-%m-%d %H:%M:%S'), filename, data_json))
+
+        conn.commit()
+        conn.close()
+
+        # # 【旧版：CSV出力】コメントアウト（2025-11-22 SQLite移行）
+        # csv_name = os.path.dirname(__file__)+"\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_"+filename+".csv"
+        # df.to_csv(csv_name, index=False, encoding='CP932')
 
     def main():
         dt_now = datetime.now(timezone(timedelta(hours=9)))  # 日本時刻
@@ -543,8 +609,38 @@ try:
         main()
 
 except Exception as e:
-    # 簡単なエラー処理
+    # エラーをSQLite genpinhyo.db の error_log テーブルに記録
     print(e)
     dt_now = datetime.now(timezone(timedelta(hours=9)))  # 日本時刻
-    with open(os.path.dirname(__file__)+"\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_err"+".txt", mode='w') as f:
-        f.write(str(e))
+    db_path = os.path.join(os.path.dirname(__file__), 'Database', 'genpinhyo.db')
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # error_log テーブルを作成（存在しない場合）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS error_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                error_message TEXT NOT NULL
+            )
+        ''')
+
+        # エラーメッセージを保存
+        cursor.execute('''
+            INSERT INTO error_log (created_at, error_message)
+            VALUES (?, ?)
+        ''', (dt_now.strftime('%Y-%m-%d %H:%M:%S'), str(e)))
+
+        conn.commit()
+        conn.close()
+    except Exception as db_error:
+        # SQLite保存に失敗した場合は従来のファイル出力にフォールバック
+        print(f"DB保存失敗: {db_error}")
+        with open(os.path.dirname(__file__)+"\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_err"+".txt", mode='w') as f:
+            f.write(str(e))
+
+    # # 【旧版：TXT出力】コメントアウト（2025-11-22 SQLite移行）
+    # with open(os.path.dirname(__file__)+"\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_err"+".txt", mode='w') as f:
+    #     f.write(str(e))

@@ -221,3 +221,46 @@ test*.png
 
 # Microsoft Access database files
 *.accdb
+
+# ===========================================
+# Project-specific exclusions
+# ===========================================
+
+# Work directories (temporary/generated files)
+**/work/
+**/backup/
+**/logs/
+**/output/
+**/csv/sumi/
+
+# Generated files
+*_err.txt
+*_履歴.csv
+qrcode_*.png
+現品票_*.xlsx
+再発行用現品票_*.xlsx
+*自動帳票作成データ*.csv
+
+# Backup archives
+*.zip
+
+# Database backups
+**/DB_backup/
+
+# Large data directories
+10_CAMAccess_Data取得/KakouDenpyo/
+
+# RPA directories (large/binary files)
+60_rbom_rpa/
+
+# Temp processing directories
+90_temp/*/kensyou/
+90_temp/24_*/
+90_temp/25_*/
+
+# Excel templates should be kept, but generated xlsx excluded
+# Keep: pg/*.xlsx (templates)
+# Exclude generated xlsx in work directories (already covered by **/work/)
+
+# シール作成 specific
+シール作成/
