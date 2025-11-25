@@ -9,6 +9,7 @@
 import os
 import shutil
 import pandas as pd
+import httpx
 from dotenv import load_dotenv
 from logger_config import setup_logger, cleanup_old_logs
 
@@ -33,6 +34,296 @@ def set_file_permissions(file_path):
         logger.debug(f"パーミッション設定完了: {file_path} (666)")
     except Exception as e:
         logger.warning(f"パーミッション設定に失敗しました: {file_path} - {e}")
+
+
+def fetch_oyalistno_from_api(df, indno_col='伝票No', lineno_col='行番号'):
+    """
+    FastAPI の /instructions/slip/batch エンドポイントから OYALISTNO を取得
+
+    Args:
+        df (pd.DataFrame): 処理対象のDataFrame
+        indno_col (str): INDNO に対応するカラム名
+        lineno_col (str): LINENO に対応するカラム名
+
+    Returns:
+        pd.DataFrame: OYALISTNO カラムが追加されたDataFrame
+    """
+    # 環境変数からAPI設定を取得
+    api_base_url = os.getenv('FASTAPI_BASE_URL', 'http://fastapi-rbom-app:8000')
+    read_api_key = os.getenv('READ_API_KEY', '')
+
+    if not read_api_key:
+        logger.error("READ_API_KEY が設定されていません")
+        df['OYALISTNO'] = None
+        return df
+
+    # API呼び出し用のキーリストを作成
+    slip_keys = []
+    for _, row in df.iterrows():
+        indno = row.get(indno_col)
+        lineno = row.get(lineno_col)
+        if pd.notna(indno) and pd.notna(lineno):
+            slip_keys.append({
+                "indno": str(indno),
+                "lineno": int(lineno)
+            })
+
+    if not slip_keys:
+        logger.warning("API呼び出し用のキーが見つかりませんでした")
+        df['OYALISTNO'] = None
+        return df
+
+    # バッチサイズ（100件ずつ処理）
+    batch_size = 100
+    total_keys = len(slip_keys)
+
+    logger.info(f"  FastAPI に {total_keys} 件のデータをリクエスト中...")
+    logger.info(f"  {batch_size}件ずつのバッチ処理を実行します")
+
+    # API呼び出し（バッチ処理）
+    headers = {
+        "X-API-KEY": read_api_key,
+        "Content-Type": "application/json"
+    }
+
+    api_data = []
+
+    try:
+        import time
+        overall_start = time.time()
+
+        with httpx.Client(timeout=120.0) as client:
+            # バッチ処理
+            for i in range(0, total_keys, batch_size):
+                batch_keys = slip_keys[i:i + batch_size]
+                batch_num = (i // batch_size) + 1
+                total_batches = (total_keys + batch_size - 1) // batch_size
+
+                logger.info(f"    バッチ {batch_num}/{total_batches}: {len(batch_keys)}件を処理開始...")
+
+                batch_start = time.time()
+
+                response = client.post(
+                    f"{api_base_url}/instructions/slip/batch",
+                    headers=headers,
+                    json=batch_keys
+                )
+
+                batch_elapsed = time.time() - batch_start
+
+                response.raise_for_status()
+                batch_data = response.json()
+                api_data.extend(batch_data)
+
+                logger.info(f"      → 完了: {len(batch_data)}件取得, 所要時間: {batch_elapsed:.2f}秒")
+
+                # 10バッチごとに進捗サマリーを表示
+                if batch_num % 10 == 0:
+                    progress_elapsed = time.time() - overall_start
+                    avg_time_per_batch = progress_elapsed / batch_num
+                    remaining_batches = total_batches - batch_num
+                    estimated_remaining = avg_time_per_batch * remaining_batches
+                    logger.info(f"    【進捗】{batch_num}/{total_batches}バッチ完了 | "
+                              f"経過: {progress_elapsed:.1f}秒 | "
+                              f"平均: {avg_time_per_batch:.2f}秒/バッチ | "
+                              f"推定残り: {estimated_remaining:.1f}秒")
+
+        overall_elapsed = time.time() - overall_start
+        avg_per_batch = overall_elapsed / total_batches if total_batches > 0 else 0
+        logger.info(f"  全バッチ処理完了: 総所要時間 {overall_elapsed:.2f}秒 (平均 {avg_per_batch:.2f}秒/バッチ)")
+
+        logger.info(f"  FastAPI から {len(api_data)} 件のデータを取得完了")
+
+        # API結果をマッピング用の辞書に変換
+        # 注意: FastAPIはalias（大文字）でレスポンスを返すため、大文字キーを使用
+        oyalistno_map = {}
+        invalid_count = 0
+        invalid_indno_list = []  # linenoがNoneのindnoを記録
+        invalid_lineno_list = []  # indnoがNoneのlinenoを記録
+
+        for item in api_data:
+            indno = item.get('INDNO')
+            lineno = item.get('LINENO')
+
+            # indnoとlinenoが有効な値か確認
+            if indno is None or lineno is None:
+                invalid_count += 1
+
+                # linenoがNoneの場合、indnoを記録
+                if lineno is None and indno is not None:
+                    if len(invalid_indno_list) < 10:  # 最初の10件まで記録
+                        invalid_indno_list.append(str(indno))
+
+                # indnoがNoneの場合、linenoを記録
+                if indno is None and lineno is not None:
+                    if len(invalid_lineno_list) < 10:
+                        invalid_lineno_list.append(str(lineno))
+
+                # 最初の3件のみ詳細ログ出力
+                if invalid_count <= 3:
+                    logger.warning(f"  不正なデータをスキップ: INDNO={indno}, LINENO={lineno}")
+                continue
+
+            try:
+                key = (str(indno), int(lineno))
+                oyalistno_map[key] = item.get('OYALISTNO')
+            except (ValueError, TypeError) as e:
+                invalid_count += 1
+                if invalid_count <= 3:
+                    logger.warning(f"  データ変換エラーをスキップ: indno={indno}, lineno={lineno}, error={e}")
+                continue
+
+        # 不正データのサマリーをログ出力
+        if invalid_count > 0:
+            logger.warning(f"  不正なデータ: {invalid_count}件をスキップしました")
+
+            if invalid_indno_list:
+                logger.warning(f"    └ linenoがNoneのINDNO（最初の{len(invalid_indno_list)}件）: {', '.join(invalid_indno_list)}")
+
+            if invalid_lineno_list:
+                logger.warning(f"    └ indnoがNoneのLINENO（最初の{len(invalid_lineno_list)}件）: {', '.join(invalid_lineno_list)}")
+
+        logger.info(f"  マッピング辞書作成: {len(oyalistno_map)}件")
+
+        # DataFrameにOYALISTNOを追加
+        def get_oyalistno(row):
+            try:
+                indno_val = row[indno_col]
+                lineno_val = row[lineno_col]
+                if pd.isna(indno_val) or pd.isna(lineno_val):
+                    return None
+                key = (str(indno_val), int(lineno_val))
+                return oyalistno_map.get(key, None)
+            except (ValueError, TypeError, KeyError):
+                return None
+
+        df['OYALISTNO'] = df.apply(get_oyalistno, axis=1)
+
+        # OYALISTNOの追加と統計情報
+        oyalistno_added = df['OYALISTNO'].notna().sum()
+        oyalistno_none = df['OYALISTNO'].isna().sum()
+        logger.info(f"  OYALISTNO 追加結果: 取得={oyalistno_added}件, 未取得(None)={oyalistno_none}件")
+
+        # OYALISTNOがNoneのデータのサンプルを出力（最初の10件）
+        if oyalistno_none > 0:
+            none_samples = df[df['OYALISTNO'].isna()][[indno_col, lineno_col]].head(10)
+            logger.warning(f"  OYALISTNOが取得できなかったデータ（最初の{min(10, oyalistno_none)}件）:")
+            for idx, row in none_samples.iterrows():
+                logger.warning(f"    INDNO={row[indno_col]}, LINENO={row[lineno_col]}")
+
+        # デバッグ: OYALISTNO のユニーク数を確認
+        unique_oyalistno = df['OYALISTNO'].nunique(dropna=False)
+        unique_oyalistno_without_none = df['OYALISTNO'].nunique(dropna=True)
+        logger.info(f"  OYALISTNO のユニーク数: {unique_oyalistno}種類 (Noneを除く: {unique_oyalistno_without_none}種類)")
+
+        # OYALISTNOの分布確認（上位5件）
+        if unique_oyalistno_without_none > 0:
+            oyalistno_counts = df['OYALISTNO'].value_counts(dropna=True).head(5)
+            logger.info(f"  OYALISTNO 上位5件の分布:")
+            for oyano, count in oyalistno_counts.items():
+                logger.info(f"    {oyano}: {count}件")
+
+        return df
+
+    except httpx.RequestError as e:
+        logger.error(f"  API接続エラー: {e}")
+        logger.error(f"  エラー種別: {type(e).__name__}")
+        if hasattr(e, 'request'):
+            logger.error(f"  リクエストURL: {e.request.url if e.request else 'N/A'}")
+        df['OYALISTNO'] = None
+        return df
+    except httpx.HTTPStatusError as e:
+        logger.error(f"  APIエラー: {e.response.status_code} - {e.response.text}")
+        logger.error(f"  リクエストURL: {e.request.url if e.request else 'N/A'}")
+        df['OYALISTNO'] = None
+        return df
+    except Exception as e:
+        logger.error(f"  予期せぬエラー: {e}")
+        logger.error(f"  エラー種別: {type(e).__name__}")
+        import traceback
+        logger.error(traceback.format_exc())
+        df['OYALISTNO'] = None
+        return df
+
+
+def deduplicate_with_oyalistno(df, indno_col='伝票No', oyalistno_col='OYALISTNO', qty_col='必要数'):
+    """
+    2段階重複削除ロジック
+
+    1段階目: INDNO → OYALISTNO の順でグループ化し、各グループの1行目のみを保持
+    2段階目: 同じINDNOで異なるOYALISTNOの行がある場合、必要数を合計して1行に集約
+
+    Args:
+        df (pd.DataFrame): 処理対象のDataFrame
+        indno_col (str): INDNO に対応するカラム名
+        oyalistno_col (str): OYALISTNO カラム名
+        qty_col (str): 必要数カラム名
+
+    Returns:
+        pd.DataFrame: 重複削除後のDataFrame
+    """
+    original_rows = len(df)
+
+    # 1段階目: INDNO → OYALISTNO でグループ化し、各グループの1行目のみを保持
+    df_sorted = df.sort_values([indno_col, oyalistno_col])
+    df_stage1 = df_sorted.drop_duplicates(subset=[indno_col, oyalistno_col], keep='first')
+
+    stage1_removed = original_rows - len(df_stage1)
+    if stage1_removed > 0:
+        logger.info(f"  1段階目重複削除: {stage1_removed:,}行削除 → {len(df_stage1):,}行")
+
+    # デバッグ: 1段階目後のINDNOとOYALISTNOのユニーク数
+    logger.info(f"  1段階目後のINDNOユニーク数: {df_stage1[indno_col].nunique()}")
+    logger.info(f"  1段階目後のOYALISTNOユニーク数: {df_stage1[oyalistno_col].nunique(dropna=False)}")
+
+    # 2段階目: 同じINDNOで異なるOYALISTNOがある場合、必要数を合計
+    # まず、INDNOでグループ化し、複数のOYALISTNOがあるかチェック
+    indno_groups = df_stage1.groupby(indno_col)
+
+    result_rows = []
+    stage2_removed = 0
+    stage2_aggregated_count = 0
+
+    for indno, group in indno_groups:
+        if len(group) == 1:
+            # OYALISTNOが1つだけの場合はそのまま
+            result_rows.append(group.iloc[0])
+        else:
+            # 複数のOYALISTNOがある場合
+            # 必要数を合計
+            total_qty = group[qty_col].sum()
+
+            # デバッグ: 集約の詳細をログ出力（最初の3件のみ）
+            if stage2_aggregated_count < 3:
+                oyalistno_list = group[oyalistno_col].tolist()
+                qty_list = group[qty_col].tolist()
+                logger.info(f"    2段階目集約例: INDNO={indno}")
+                logger.info(f"      OYALISTNOリスト: {oyalistno_list}")
+                logger.info(f"      必要数リスト: {qty_list} → 合計: {total_qty}")
+
+            # 1行目を基準に、必要数だけ上書き
+            first_row = group.iloc[0].copy()
+            first_row[qty_col] = total_qty
+            result_rows.append(first_row)
+
+            stage2_removed += len(group) - 1
+            stage2_aggregated_count += 1
+
+    df_final = pd.DataFrame(result_rows).reset_index(drop=True)
+
+    if stage2_removed > 0:
+        logger.info(f"  2段階目重複削除: {stage2_removed:,}行削除（必要数を集約） → {len(df_final):,}行")
+        logger.info(f"  2段階目で集約されたINDNO数: {stage2_aggregated_count}件")
+
+    # OYALISTNOカラムを削除（作業用なので出力に含めない）
+    if oyalistno_col in df_final.columns:
+        df_final = df_final.drop(columns=[oyalistno_col])
+
+    total_removed = original_rows - len(df_final)
+    logger.info(f"  合計重複削除: {total_removed:,}行削除 → {len(df_final):,}行")
+    logger.info(f"  INDNOがユニークになりました: {df_final[indno_col].nunique()}件")
+
+    return df_final
 
 
 def read_csv_files():
@@ -92,9 +383,9 @@ def copy_simple_file(source_path, output_dir, output_filename=None):
         return False
 
 
-def process_and_copy_file(source_path, output_dir, delete_columns=None, output_filename=None, rename_columns=None):
+def process_and_copy_file(source_path, output_dir, delete_columns=None, output_filename=None, rename_columns=None, filter_zero_columns=None, reorder_columns=None, use_advanced_deduplication=False):
     """
-    CSVファイルを加工してコピー（項目削除・重複削除・カラム名変更）
+    CSVファイルを加工してコピー（項目削除・重複削除・カラム名変更・0行フィルタ・カラム並び替え）
 
     Args:
         source_path (str): ソースファイルパス
@@ -102,6 +393,9 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
         delete_columns (list): 削除対象カラムのリスト
         output_filename (str, optional): 出力ファイル名（指定しない場合は元のファイル名）
         rename_columns (dict, optional): カラム名変更マッピング（旧名: 新名）
+        filter_zero_columns (list, optional): 指定カラムが全て0の行を削除
+        reorder_columns (list, optional): カラムの並び順リスト
+        use_advanced_deduplication (bool, optional): 高度な重複削除を使用（API呼び出し + 2段階削除）
 
     Returns:
         bool: 成功したらTrue
@@ -136,6 +430,11 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
         original_rows = len(df)
         logger.info(f"  元データ: {original_rows:,}行, {len(df.columns)}列")
 
+        # 高度な重複削除を使用する場合、API呼び出しを先に実行（項目削除前）
+        if use_advanced_deduplication:
+            logger.info(f"  高度な重複削除モード: API呼び出しを実行")
+            df = fetch_oyalistno_from_api(df, indno_col='伝票No', lineno_col='行番号')
+
         # 項目削除
         if delete_columns:
             existing_columns = [col for col in delete_columns if col in df.columns]
@@ -152,12 +451,32 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
                 for old, new in existing_renames.items():
                     logger.info(f"    '{old}' → '{new}'")
 
-        # 重複行削除
-        df_deduplicated = df.drop_duplicates()
-        duplicates_removed = original_rows - len(df_deduplicated)
-        if duplicates_removed > 0:
-            logger.info(f"  重複削除: {duplicates_removed:,}行削除 → {len(df_deduplicated):,}行")
-            df = df_deduplicated
+        # 重複行削除（高度な重複削除 or 通常の重複削除）
+        if use_advanced_deduplication:
+            # 2段階重複削除（INDNO → OYALISTNO、必要数の集約）
+            df = deduplicate_with_oyalistno(df, indno_col='伝票No', oyalistno_col='OYALISTNO', qty_col='必要数')
+        else:
+            # 通常の重複削除（全カラムで判定）
+            df_deduplicated = df.drop_duplicates()
+            duplicates_removed = original_rows - len(df_deduplicated)
+            if duplicates_removed > 0:
+                logger.info(f"  重複削除: {duplicates_removed:,}行削除 → {len(df_deduplicated):,}行")
+                df = df_deduplicated
+
+        # 0行フィルタ（指定カラムが全て0の行を削除）
+        if filter_zero_columns:
+            existing_filter_columns = [col for col in filter_zero_columns if col in df.columns]
+            if len(existing_filter_columns) == len(filter_zero_columns):
+                # 全てのカラムが0の行を特定
+                rows_before_filter = len(df)
+                mask = (df[existing_filter_columns] == 0).all(axis=1)
+                df = df[~mask]
+                rows_filtered = rows_before_filter - len(df)
+                if rows_filtered > 0:
+                    logger.info(f"  0行フィルタ: {rows_filtered:,}行削除（{', '.join(existing_filter_columns)}が全て0） → {len(df):,}行")
+            else:
+                missing_columns = [col for col in filter_zero_columns if col not in df.columns]
+                logger.warning(f"  0行フィルタ: スキップ（カラムが見つかりません: {', '.join(missing_columns)}）")
 
         # 数値列をint型に変換（空欄は空欄のまま）
         def convert_to_int(value):
@@ -177,6 +496,26 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
         if '払出先' in df.columns:
             df['払出先'] = df['払出先'].apply(convert_to_int)
             logger.info(f"  払出先列をint型に変換（空欄は保持）")
+
+        # カラムの並び替え
+        if reorder_columns:
+            # 指定されたカラムが全て存在するか確認
+            existing_reorder_columns = [col for col in reorder_columns if col in df.columns]
+            missing_columns = [col for col in reorder_columns if col not in df.columns]
+            extra_columns = [col for col in df.columns if col not in reorder_columns]
+
+            if missing_columns:
+                logger.warning(f"  カラム並び替え: 指定されたカラムが見つかりません: {', '.join(missing_columns)}")
+
+            if extra_columns:
+                logger.warning(f"  カラム並び替え: 並び替え指定にないカラムがあります: {', '.join(extra_columns)}")
+
+            # 指定された順番でカラムを並び替え（存在しないカラムは無視）
+            if existing_reorder_columns:
+                # 指定された順番のカラム + 指定されていない残りのカラム
+                new_column_order = existing_reorder_columns + extra_columns
+                df = df[new_column_order]
+                logger.info(f"  カラム並び替え: {len(existing_reorder_columns)}列を指定順に並び替え")
 
         # 出力先ディレクトリが存在しない場合は作成
         os.makedirs(output_dir, exist_ok=True)
@@ -250,6 +589,13 @@ def main():
                 old, new = pair.split(':', 1)
                 rename_columns_file2[old.strip()] = new.strip()
 
+    # カラム並び替え順序の取得（形式: "カラム1,カラム2,カラム3,..."）
+    reorder_columns_file1_str = os.getenv('REORDER_COLUMNS_FILE1', '')
+    reorder_columns_file2_str = os.getenv('REORDER_COLUMNS_FILE2', '')
+
+    reorder_columns_file1 = [col.strip() for col in reorder_columns_file1_str.split(',') if col.strip()]
+    reorder_columns_file2 = [col.strip() for col in reorder_columns_file2_str.split(',') if col.strip()]
+
     success_count = 0
     error_count = 0
 
@@ -261,19 +607,32 @@ def main():
 
         # 加工対象ファイルかどうか判定
         if filename == process_file1:
-            # CAMKakouDenpyou.csv - 項目削除・重複削除・カラム名変更
+            # CAMKakouDenpyou.csv - 項目削除・重複削除・カラム名変更・カラム並び替え
             if delete_columns_file1:
                 logger.info(f"  削除対象カラム: {', '.join(delete_columns_file1)}")
+            if reorder_columns_file1:
+                logger.info(f"  カラム並び替え: {len(reorder_columns_file1)}列指定")
             logger.info(f"  出力ファイル名: {output_file1}")
-            result = process_and_copy_file(source_path, output_dir, delete_columns_file1, output_file1, rename_columns_file1)
+            result = process_and_copy_file(source_path, output_dir, delete_columns_file1, output_file1, rename_columns_file1, None, reorder_columns_file1)
         elif filename == process_file2:
-            # ASPKakouDenpyo.csv - 項目削除・重複削除・カラム名変更
+            # ASPKakouDenpyo.csv - 項目削除・高度な重複削除・カラム名変更・カラム並び替え
             if delete_columns_file2:
                 logger.info(f"  削除対象カラム: {', '.join(delete_columns_file2)}")
+            if reorder_columns_file2:
+                logger.info(f"  カラム並び替え: {len(reorder_columns_file2)}列指定")
             logger.info(f"  出力ファイル名: {output_file2}")
-            result = process_and_copy_file(source_path, output_dir, delete_columns_file2, output_file2, rename_columns_file2)
+            logger.info(f"  高度な重複削除: 有効（API呼び出し + 2段階削除 + 必要数集約）")
+            result = process_and_copy_file(source_path, output_dir, delete_columns_file2, output_file2, rename_columns_file2, None, reorder_columns_file2, use_advanced_deduplication=True)
+        elif filename == 'CONV.csv':
+            # CONV.csv - 0行フィルタ（数量・セットアップ・スペアが全て0の行を削除）
+            logger.info(f"  0行フィルタ: 数量, セットアップ, スペアが全て0の行を削除")
+            result = process_and_copy_file(source_path, output_dir, filter_zero_columns=['数量', 'セットアップ', 'スペア'])
+        elif filename == 'SEISANKI.csv':
+            # SEISANKI.csv - 0行フィルタ（数量・セットアップ・スペアが全て0の行を削除）
+            logger.info(f"  0行フィルタ: 数量, セットアップ, スペアが全て0の行を削除")
+            result = process_and_copy_file(source_path, output_dir, filter_zero_columns=['数量', 'セットアップ', 'スペア'])
         else:
-            # CONV.csv, SEISANKI.csv - そのままコピー
+            # その他のファイル - そのままコピー
             result = copy_simple_file(source_path, output_dir)
 
         if result:
