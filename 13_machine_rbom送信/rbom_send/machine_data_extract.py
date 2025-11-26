@@ -108,9 +108,31 @@ def load_pattern3_configs():
     return configs
 
 
+def get_indno_numeric_value(indno):
+    """
+    INDNOの数値部分を抽出（先頭1文字を除く）
+
+    Args:
+        indno: INDNO文字列（例: 'H00001111'）
+
+    Returns:
+        int: 数値部分。変換失敗時はfloat('inf')
+    """
+    try:
+        if indno and len(indno) > 1:
+            return int(indno[1:])
+        return float('inf')
+    except (ValueError, TypeError):
+        return float('inf')
+
+
 def load_indno_mapping():
     """
     lot_mapping.db の mapping_results テーブルからINDNOマッピング辞書を作成
+
+    同一lot_numberに複数のindnoが存在する場合、
+    indnoの数値部分（先頭1文字を除く）が最小のものを優先する。
+    例: H00001, H00002, H00003 → H00001を採用
 
     Returns:
         dict: {lot_number: indno} の辞書。読み込み失敗時は空辞書
@@ -131,7 +153,15 @@ def load_indno_mapping():
 
         for lot_number, indno in rows:
             if lot_number and indno:
-                mapping[lot_number] = indno
+                if lot_number not in mapping:
+                    # 初回登録
+                    mapping[lot_number] = indno
+                else:
+                    # 既存エントリと比較し、数値が小さい方を採用
+                    existing_value = get_indno_numeric_value(mapping[lot_number])
+                    new_value = get_indno_numeric_value(indno)
+                    if new_value < existing_value:
+                        mapping[lot_number] = indno
 
         conn.close()
         logger.info(f"INDNOマッピング読み込み完了: {len(mapping)}件")
