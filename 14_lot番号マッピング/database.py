@@ -576,7 +576,8 @@ class DatabaseManager:
             # 既存のマッピング結果をクリア
             conn.execute(text("DELETE FROM mapping_results"))
 
-            # 自動マッピング: 品目コード=HMCD かつ 組立番号=SEINO
+            # 自動マッピング: 品目コード前方一致HMCD かつ 組立番号=SEINO
+            # item_code と hmcd は前方一致でマッピング（例: 478-409AA30 と 478-409AA300）
             auto_mapping_sql = text("""
             INSERT OR IGNORE INTO mapping_results
             (lot_number, indno, item_code, assembly_number, hmcd, seino, mapping_type)
@@ -590,7 +591,7 @@ class DatabaseManager:
                 'auto'
             FROM lot_mapping_data l
             INNER JOIN api_instructions a
-                ON l.item_code = a.hmcd
+                ON (a.hmcd LIKE l.item_code || '%' OR l.item_code LIKE a.hmcd || '%')
                 AND l.assembly_number = a.seino
             """)
 
