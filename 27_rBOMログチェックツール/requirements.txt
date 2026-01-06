@@ -1,0 +1,7 @@
+# rBOMログチェックツール
+#
+# 必要環境:
+#   Python >= 3.9
+#
+# Windows環境ではtzdataが必要（zoneinfoのタイムゾーンデータ）
+tzdata
