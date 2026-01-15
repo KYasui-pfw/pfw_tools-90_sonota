@@ -1,5 +1,5 @@
 # KRD MySQL → SQLite 同期処理
-# 高頻度: 5分ごと、低頻度: 1時間ごと
+# 高頻度: 5分ごと、低頻度: 1時間ごと、rBOM: 15分ごと
 
 # 環境変数の設定
 SHELL=/bin/bash
@@ -10,5 +10,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # 低頻度同期（45テーブル）- 1時間ごとに実行
 0 * * * * root cd /app && set -a && source .env && set +a && python3 /app/krd_sync_hourly.py >> /app/logs/cron_hourly.log 2>&1
+
+# rBOM API同期（_rBOM_MSTR_RES）- 15分ごとに実行
+*/15 * * * * root cd /app && set -a && source .env && set +a && python3 /app/krd_sync_rbom.py >> /app/logs/cron_rbom.log 2>&1
 
 # 空行が必要（cronの仕様）

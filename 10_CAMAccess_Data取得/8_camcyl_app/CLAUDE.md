@@ -130,6 +130,14 @@ Every 15 minutes → run_all.sh
 - **DENPYONO→SEINO Lookup**: Required before instruction filtering
 - **Fixed Values**: IPTANCD="SECT1707", prdqty=1, ktedqty=1
 
+**Process 4 DENPYONO→INDNO Mapping (lot_mapping.db)**: Optional SQLite database for converting DENPYONO to INDNO before API lookup:
+- **Purpose**: DENPYONOが F000... 形式の場合、lot_mapping.db を参照して H000... 形式の INDNO に変換
+- **Database Path**: `LOT_MAPPING_DB_PATH` 環境変数で指定（default: `/app/data/lot_mapping.db`）
+- **Table**: `mapping_results` テーブルの `lot_number` → `indno` マッピングを使用
+- **Duplicate Handling**: 同一 lot_number に複数 indno がある場合、数値部分（先頭1文字を除く）が最小のものを選択
+- **Fallback**: lot_mapping.db に存在しない DENPYONO はそのまま API に問い合わせ
+- **Data Source**: `14_lot番号マッピング` ツールで生成（PostgreSQL view_report_405/334 + CSV データをマージ）
+
 ### Key Components
 
 **entrypoint.sh**: Container startup script that:
@@ -181,6 +189,7 @@ Every 15 minutes → run_all.sh
 - `JOB_TABLE_NAME`: Job table name for LEFT JOIN with TABLE1 (Process 2, default: "ジョブ")
 - `PROCESS3_CSV_PATH`: EJ data CSV input path (Process 3)
 - `PROCESS4_CSV_PATH`: Cyl/Dial data CSV input path (Process 4)
+- `LOT_MAPPING_DB_PATH`: SQLite database for DENPYONO→INDNO mapping (Process 4, default: /app/data/lot_mapping.db)
 - `FASTAPI_BASE_URL`: FastAPI server URL (Process 3 & 4, default: http://fastapi-rbom-app:8000)
 - `READ_API_KEY`: API key for status checks (Process 3 & 4)
 - `INSERT_API_KEY`: API key for completion writes (Process 3 & 4)
@@ -236,6 +245,13 @@ docker-compose.yml expects these host paths:
 - Verify CAT2 column contains values ending in "405" (CYLINDER) or "409" (DIAL)
 - Check DENPYONO→SEINO lookup is successful (requires valid DENPYONO in rBOM)
 - Confirm 4-month instruction data window covers expected date ranges
+
+**Process 4 lot_mapping.db issues**:
+- **Symptom**: Log shows "API検索キー=F000..." instead of "API検索キー=H000..." for all records
+- **Cause**: lot_mapping.db に CSV の DENPYONO が含まれていない
+- **Verification**: Log で "lot_mapping.db からマッピング読み込み: N件" を確認し、CSV の DENPYONO と照合
+- **Solution**: `14_lot番号マッピング` ツールで CSV データを含めた lot_mapping.db を再生成
+- **Note**: lot_mapping.db のデータソースは PostgreSQL (view_report_405/334) と CSV (Cyl_pfw_table_KaLstCyl_All) の両方が必要
 
 **Process 1 OYALISTNO all None (Advanced Deduplication failure)**:
 - **Symptom**: Log shows "マッピング辞書作成: 0件" and "OYALISTNO 追加結果: 取得=0件"

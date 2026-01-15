@@ -76,6 +76,9 @@ def load_pattern3_configs():
         judge_col = os.getenv(f'PATTERN3_{table_id}_JUDGE_COLUMN', '')
         date_col = os.getenv(f'PATTERN3_{table_id}_DATE_COLUMN', '')
         iptancd = os.getenv(f'PATTERN3_{table_id}_IPTANCD', '')
+        # 334専用: SEINO+HMNMマッチングモード
+        mode = os.getenv(f'PATTERN3_{table_id}_MODE', '')
+        hmnm_filter = os.getenv(f'PATTERN3_{table_id}_HMNM_FILTER', '')
 
         # 必須項目チェック: source_table, judge_col, date_col, iptancd は必須
         # indno_col は "FROM_API" の場合、seino_col と ktcd_col も必須
@@ -102,7 +105,9 @@ def load_pattern3_configs():
             'ktcd_col': ktcd_col,
             'judge_col': judge_col,
             'date_col': date_col,
-            'iptancd': iptancd
+            'iptancd': iptancd,
+            'mode': mode,
+            'hmnm_filter': hmnm_filter
         })
 
     return configs

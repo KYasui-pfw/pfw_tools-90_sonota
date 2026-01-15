@@ -735,6 +735,10 @@ try:
     st.set_page_config(
     page_title = '編機調整報告書',page_icon='move.gif')
 
+    # 実行中フラグの初期化
+    if 'is_running' not in st.session_state:
+      st.session_state.is_running = False
+
     HIDE_ST_STYLE = """
                     <style>
                     div[data-testid="stToolbar"] {
@@ -823,30 +827,36 @@ try:
         st.markdown(f'''【確認】　実行年月：{str(nen)}年{str(getsu)}月  
                       **この操作を実行してもよろしいですか？**''')   
         if st.button("実行"):
-          if ((rnen==nen) and (int(rgetsu)>=int(getsu))) or (rnen>nen):
+          if st.session_state.is_running:
+            st.warning('処理実行中です。しばらくお待ちください。')
+          elif ((rnen==nen) and (int(rgetsu)>=int(getsu))) or (rnen>nen):
             st.write('エラー：処理実行済の生産年月が指定されています。')
-            
+
           elif ((rnen==nen) and ((int(getsu)-int(rgetsu))>1)) or ((rnen<nen) and (int(rgetsu)-int(getsu))<11) or ((int(nen)-int(rnen))>1):
             st.write('エラー：前回の処理実行から２カ月以上先が指定されています。')
           else:
-            with st.spinner('帳票作成処理　実行中（目安：７～１０分）'):
-              #インプット用のデータ作成
-              input_df = input_data_create(dt_nengetsu)
+            st.session_state.is_running = True
+            try:
+              with st.spinner('帳票作成処理　実行中（目安：７～１０分）'):
+                #インプット用のデータ作成
+                input_df = input_data_create(dt_nengetsu)
 
-              #DFをcsvにコンバートして出力
-              dt_now = datetime.now(timezone(timedelta(hours=9))) # 日本時刻
-              csv_name = os.path.dirname(__file__)+"\\work\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_自動帳票作成データ"+".csv"
-              input_df.to_csv(csv_name,index=False,encoding='CP932')
-              #input_df.head(3).to_csv(csv_name,index=False,encoding='CP932')
+                #DFをcsvにコンバートして出力
+                dt_now = datetime.now(timezone(timedelta(hours=9))) # 日本時刻
+                csv_name = os.path.dirname(__file__)+"\\work\\"+dt_now.strftime('%Y%m%d%H%M%S')+"_自動帳票作成データ"+".csv"
+                input_df.to_csv(csv_name,index=False,encoding='CP932')
+                #input_df.head(3).to_csv(csv_name,index=False,encoding='CP932')
 
-              # 履歴csvを更新
-              rireki_write(nen,getsu)
+                # 履歴csvを更新
+                rireki_write(nen,getsu)
 
-              # #CSVをアップロード
-              data_upload(csv_name,input_df.shape[0])
+                # #CSVをアップロード
+                data_upload(csv_name,input_df.shape[0])
 
-              #csv作成完了
-              st.write('帳票作成処理完了')
+                #csv作成完了
+                st.write('帳票作成処理完了')
+            finally:
+              st.session_state.is_running = False
 
     # 水平線
     st.divider()

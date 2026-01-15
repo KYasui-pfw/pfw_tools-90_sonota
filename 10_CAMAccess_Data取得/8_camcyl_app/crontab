@@ -7,6 +7,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # 15分ごとに実行（0, 15, 30, 45分）
 # .envファイルを読み込んでから実行（特殊文字対応版）
-*/15 * * * * root cd /app && set -a && source .env && set +a && /app/scripts/run_all.sh >> /app/logs/cron.log 2>&1
+*/15 * * * * root cd /app && set -a && source .env && set +a && /app/scripts/run_all.sh > /dev/null 2>&1
 
 # 空行が必要（cronの仕様）

@@ -50,6 +50,19 @@ def init_db():
     # 初期設定
     cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('next_no', 1))
 
+    # メモテーブル（3つのメモを保持）
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS board_memo (
+            id INTEGER PRIMARY KEY CHECK (id >= 1 AND id <= 3),
+            content TEXT NOT NULL DEFAULT ''
+        )
+    ''')
+
+    # 初期メモレコードを挿入（3つ）
+    cursor.execute('INSERT OR IGNORE INTO board_memo (id, content) VALUES (1, "")')
+    cursor.execute('INSERT OR IGNORE INTO board_memo (id, content) VALUES (2, "")')
+    cursor.execute('INSERT OR IGNORE INTO board_memo (id, content) VALUES (3, "")')
+
     conn.commit()
     conn.close()
 
@@ -218,6 +231,23 @@ def search_deleted_tasks(start_date=None, end_date=None, delete_type=None):
     conn.close()
 
     return tasks
+
+def get_board_memo(memo_id):
+    """ボードメモを取得"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT content FROM board_memo WHERE id = ?', (memo_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result['content'] if result else ''
+
+def update_board_memo(memo_id, content):
+    """ボードメモを更新"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE board_memo SET content = ? WHERE id = ?', (content, memo_id))
+    conn.commit()
+    conn.close()
 
 # データベース初期化
 if __name__ == '__main__':

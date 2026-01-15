@@ -59,11 +59,22 @@ try:
     # krdのmachinDBに接続する（SQLite版）
     def krd_data_get(sql):
         # SQLite接続（KRD MySQL → SQLite同期データベース）
-        # \\esrv11\krd_machine\db\krd_machine.db
-        sqlite_db_path = r'\\esrv11\krd_machine\db\krd_machine.db'
+        # \\esrv11\KakouDenpyo\krd_machine.db
+        sqlite_db_path = r'\\esrv11\KakouDenpyo\krd_machine.db'
 
         conn = sqlite3.connect(sqlite_db_path)
         df = pd.read_sql(sql, conn)
+        conn.close()
+
+        return df
+
+    # lot_mapping.dbからH始まり→F始まりの変換テーブルを取得
+    def lot_mapping_get():
+        # 本番パス: D:\py\rbom_send\db\lot_mapping.db
+        lot_mapping_db_path = r'D:\py\rbom_send\db\lot_mapping.db'
+
+        conn = sqlite3.connect(lot_mapping_db_path)
+        df = pd.read_sql("SELECT lot_number, indno FROM mapping_results", conn)
         conn.close()
 
         return df
@@ -212,11 +223,27 @@ try:
         # ▼▼データの取得と結合処理開始
         # EJから出力されたASPKakouDenpyoを取得
         denpyo_df = pd.read_csv(
-            r"\\172.17.107.102\PrintOutCsv\4.加工\4-03 ASPKakouDenpyo.csv", encoding='CP932')
+            r"\\esrv11\KakouDenpyo\4-03 ASPKakouDenpyo.csv", encoding='CP932')
+        # 新CSVの列名を旧CSVの列名に変換（全角半角の差異を吸収）
+        denpyo_df = denpyo_df.rename(columns={'伝票No': '伝票Ｎｏ'})
 
         # ADD_20241217_0件dataなら抜ける
         if denpyo_df.empty:
             return
+
+        # ADD_20241208_組立番号がA+数字8桁の行を除外（例：A00012345）
+        # ADD_20251215_NaN対策と払出先49除外を追加
+        denpyo_df['組立番号'] = denpyo_df['組立番号'].fillna('').astype(str).str.strip()
+        denpyo_df = denpyo_df[~denpyo_df['組立番号'].str.match(r'^A\d{8}$')]
+
+        # ADD_20251215_払出先が49の行を除外
+        # MOD_20260105_払出先が60の行も除外
+        denpyo_df['払出先'] = denpyo_df['払出先'].fillna('').astype(str).str.strip()
+        # 除外対象の払出先リスト
+        exclude_haraidashisaki = ['49', '60']
+        # ADD_20260105_除外対象のロット番号を保持（既存データクリーンアップ用）
+        excluded_lot_numbers = denpyo_df[denpyo_df['払出先'].isin(exclude_haraidashisaki)]['伝票Ｎｏ'].tolist()
+        denpyo_df = denpyo_df[~denpyo_df['払出先'].isin(exclude_haraidashisaki)]
 
         # i-reporterより客先マスター取得
         sql = "SELECT record_key as 客先コード,value as 客先名m,field0001 as 国名m FROM view_mst_custom_record WHERE master_key = 'M_CUSTOMER'"
@@ -229,8 +256,19 @@ try:
         sql = "SELECT SLIP_NO as 伝票Ｎｏ,VERSION FROM DATA_ASP2_PUT"
         krd_df1 = krd_data_get(sql)
 
-        # 伝票Noをキーに、両dfの内容を結合
-        df2 = pd.merge(df1, krd_df1, how='left')
+        # lot_mapping.dbからH始まり→F始まりの変換テーブルを取得
+        lot_mapping_df = lot_mapping_get()
+        # indno(H始まり)をキーにdf1とマージし、lot_number(F始まり)を取得
+        df1 = pd.merge(df1, lot_mapping_df, left_on='伝票Ｎｏ', right_on='indno', how='left')
+        # lot_number(F始まり)をキーにkrd_df1とマージしてVERSIONを取得
+        df1 = pd.merge(df1, krd_df1, left_on='lot_number', right_on='伝票Ｎｏ', how='left', suffixes=('', '_krd'))
+        # 不要なカラムを削除
+        df1 = df1.drop(columns=['lot_number', 'indno', '伝票Ｎｏ_krd'], errors='ignore')
+        # VERSIONがNULL（マッチできなかった場合）は1に設定
+        df1['VERSION'] = df1['VERSION'].fillna(1).astype(int)
+
+        # 伝票Noをキーに、両dfの内容を結合（従来のマージは不要になったのでスキップ）
+        df2 = df1
 
         # krdよりプロセスコード取得
         sql = "SELECT FINAL_ITEM_CODE as 加工部番,VERSION,PROCODESTR as 工程 FROM MSTR_PROCODESTR"
@@ -457,6 +495,30 @@ try:
             # 最後にカーソルと接続を閉じる
             cur.close()
             conn.close()
+
+        # ADD_20260105_払出先49,60の既存データを削除flg=1に更新
+        if excluded_lot_numbers:
+            dbname = 'genpinhyo.db'
+            cdb = os.path.dirname(__file__)+f'\\Database\\'+dbname
+            conn = sqlite3.connect(cdb)
+            cur = conn.cursor()
+            try:
+                # 除外対象のロット番号の削除flgを1に更新
+                batch_size = 1000
+                for i in range(0, len(excluded_lot_numbers), batch_size):
+                    batch = excluded_lot_numbers[i:i+batch_size]
+                    placeholders = ','.join(['?' for _ in batch])
+                    cur.execute(f'''
+                        UPDATE delete_mst
+                        SET 削除flg = 1
+                        WHERE ロット番号 IN ({placeholders})
+                    ''', batch)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+            finally:
+                cur.close()
+                conn.close()
 
         # ADD_20241126_end
 
@@ -1143,15 +1205,19 @@ try:
         if "deselect_all" not in st.session_state:
             # st.session_state["deselect_all"] = False
             st.session_state["deselect_all"] = True
-        if st.session_state["deselect_all"]:
-            # ボタンイベントの処理
-            if st.button("全選択"):
-                st.session_state["select_all"] = True
-                st.session_state["deselect_all"] = False
-        else:
-            if st.button("全解除"):
-                st.session_state["select_all"] = False
-                st.session_state["deselect_all"] = True
+        btn_col, link_col = st.columns([1, 5])
+        with btn_col:
+            if st.session_state["deselect_all"]:
+                # ボタンイベントの処理
+                if st.button("全選択"):
+                    st.session_state["select_all"] = True
+                    st.session_state["deselect_all"] = False
+            else:
+                if st.button("全解除"):
+                    st.session_state["select_all"] = False
+                    st.session_state["deselect_all"] = True
+        with link_col:
+            st.markdown('マシニング課様：ロット番号がF始まりの現品票を再発行したい場合は<a href="http://esrv10:8505" target="_blank">こちら</a>へ (～2026/2/28まで)', unsafe_allow_html=True)
 
         # if df['帳票発行ID'] != '':
         #     df['帳票発行ID']=df['帳票発行ID'].astype(int)

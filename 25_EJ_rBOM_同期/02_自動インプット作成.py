@@ -30,9 +30,35 @@ OUTPUT_DIR = Path(__file__).parent / "02_自動インプット用"
 # ========== フィルタ条件（変更しやすいように分離） ==========
 # 対象とする発注伝票発行日（複数指定可）
 TARGET_ISSUE_DATES = [
-    "2025/12/15",
-    "2025/12/16",
-    "2025/12/17",
+#    "2025/12/16",
+#    "2025/12/17",
+#    "2025/12/18",
+#    "2025/12/19",
+#    "2025/12/20",
+#    "2025/12/21",
+#    "2025/12/22",
+#    "2025/12/23",
+#    "2025/12/24",
+#    "2025/12/25",
+#    "2025/12/26",
+#    "2025/12/27",
+#    "2025/12/28",
+#    "2025/12/29",
+#    "2025/12/30",
+#    "2025/12/31",
+    "2026/01/01",
+    "2026/01/02",
+    "2026/01/03",
+    "2026/01/04",
+    "2026/01/05",
+    "2026/01/06",
+    "2026/01/07",
+    "2026/01/08",
+    "2026/01/09",
+    "2026/01/10",
+    "2026/01/11",
+    "2026/01/12",
+    "2026/01/13"
 ]
 # ===========================================================
 
@@ -47,6 +73,7 @@ COL_M = 13   # 発注数
 COL_N = 14   # 単価
 COL_O = 15   # 発注納期
 COL_P = 16   # 発注伝票発行日
+COL_BQ = 69  # 注文取消伝票発行フラグ
 COL_CC = 81  # 勘定科目
 
 
@@ -116,6 +143,7 @@ def extract_filtered_data():
     filtered_rows = []
     stats = {
         'total': 0,
+        'bq_canceled': 0,      # BQ列が0以外（発注取消済み）
         'a_not_empty': 0,
         'f_not_empty': 0,
         'l_empty': 0,
@@ -135,6 +163,7 @@ def extract_filtered_data():
         cell_k = ws.cell(row=row_idx, column=COL_K)
         cell_l = ws.cell(row=row_idx, column=COL_L)
         cell_p = ws.cell(row=row_idx, column=COL_P)
+        cell_bq = ws.cell(row=row_idx, column=COL_BQ)
         cell_cc = ws.cell(row=row_idx, column=COL_CC)
 
         a_value = cell_a.value
@@ -143,6 +172,13 @@ def extract_filtered_data():
         l_value = cell_l.value
         p_value = normalize_date(cell_p.value)
         cc_value = cell_cc.value
+
+        # フィルタ0: BQ列（注文取消伝票発行フラグ）が0以外の場合は除外
+        bq_value = cell_bq.value
+        bq_str = str(bq_value).strip() if bq_value is not None else ''
+        if bq_str != '' and bq_str != '0':
+            stats['bq_canceled'] += 1
+            continue
 
         # 例外: K列が赤背景（取引先不一致）の場合は他のフィルタをスキップして出力対象にする
         if is_red_background(cell_k):
@@ -219,6 +255,7 @@ def extract_filtered_data():
     print("フィルタリング結果")
     print("-" * 40)
     print(f"全行数: {stats['total']}行")
+    print(f"  除外: BQ列（発注取消済み）: {stats['bq_canceled']}行")
     print(f"  除外: A列（工程）が空欄でない: {stats['a_not_empty']}行")
     print(f"  除外: F列（rBOM発注番号）が空欄でない: {stats['f_not_empty']}行")
     print(f"  除外: L列（品目番号）が空欄: {stats['l_empty']}行")

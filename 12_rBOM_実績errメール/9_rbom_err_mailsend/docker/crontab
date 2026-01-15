@@ -2,6 +2,6 @@
 # 5分ごとにエラー監視プログラムを実行
 
 # 環境変数を読み込んでPythonスクリプトを実行
-*/5 * * * * cd /app && /usr/local/bin/python -m app.monitor >> /app/logs/cron.log 2>&1
+*/5 * * * * cd /app && /usr/local/bin/python -m app.monitor > /dev/null 2>&1
 
 # 空行が必要（cron仕様）

@@ -146,7 +146,7 @@ def process_maekotei_for_matching(csv_path):
 
 
 def fetch_d3340_data(order_numbers):
-    """D3340テーブルからデータを取得（FastAPI経由）"""
+    """D3340テーブルからデータを取得（FastAPI経由・全件取得）"""
     print(f"\nD3340データ取得中... (対象: {len(order_numbers)}件)")
 
     headers = {
@@ -157,21 +157,37 @@ def fetch_d3340_data(order_numbers):
 
     # NOTE列がE+数字で始まるデータを全て取得し、Python側でマッチング
     # （NOTE列は「E9057565/植木依頼/...」のような形式のため）
-    payload = {
-        "table": "D3340",
-        "columns": D3340_COLUMNS,
-        "where": {
-            "NOTE": {"like": "E%"}
-        },
-        "limit": 10000
-    }
+    # ページネーションで全件取得
+    all_rows = []
+    offset = 0
+    limit = 10000
 
     try:
-        response = requests.post(API_URL, json=payload, headers=headers, timeout=120)
-        response.raise_for_status()
+        while True:
+            payload = {
+                "table": "D3340",
+                "columns": D3340_COLUMNS,
+                "where": {
+                    "NOTE": {"like": "E%"}
+                },
+                "limit": limit,
+                "offset": offset
+            }
 
-        data = response.json()
-        df = pd.DataFrame(data.get("rows", []))
+            response = requests.post(API_URL, json=payload, headers=headers, timeout=120)
+            response.raise_for_status()
+
+            data = response.json()
+            rows = data.get("rows", [])
+            if not rows:
+                break
+
+            all_rows.extend(rows)
+            if len(rows) < limit:
+                break
+            offset += limit
+
+        df = pd.DataFrame(all_rows)
         print(f"D3340から取得（E%）: {len(df)}行")
 
         if df.empty:
@@ -936,8 +952,10 @@ def mark_auto_input_exclusions(excel_path):
     # 列インデックス（1始まり）
     col_a_idx = 1    # A列 = 工程
     col_f_idx = 6    # F列 = rBOM発注番号（除外理由を追記）
+    col_g_idx = 7    # G列 = 行番号（LINENO）
     col_k_idx = 11   # K列 = 仕入先コード（取引先コード）
     col_l_idx = 12   # L列 = 品目番号
+    col_bq_idx = 69  # BQ列 = 注文取消伝票発行フラグ
     col_cc_idx = 81  # CC列 = 勘定科目
 
     # 統計
@@ -947,10 +965,12 @@ def mark_auto_input_exclusions(excel_path):
         'excluded_pink': 0,  # 薄いピンク（rBOM対応依頼）
         'target': 0,         # 自動インプット対象
         'skipped': 0,        # F列に数字があるためスキップ
+        'g_has_value': 0,    # G列に値があるためスキップ
         'a_not_empty': 0,
         'l_empty': 0,
         'k_red': 0,          # K列赤背景
         'k_ca_pt': 0,
+        'bq_canceled': 0,    # BQ列が0以外（発注取消済み）
         'cc_not_valid': 0,   # 勘定科目が12/33以外
         'f_cleared': 0,      # F列クリア件数
     }
@@ -961,12 +981,35 @@ def mark_auto_input_exclusions(excel_path):
         # 各セルの値を取得
         cell_a = ws.cell(row=row_idx, column=col_a_idx)
         cell_f = ws.cell(row=row_idx, column=col_f_idx)
+        cell_g = ws.cell(row=row_idx, column=col_g_idx)
         cell_k = ws.cell(row=row_idx, column=col_k_idx)
         cell_l = ws.cell(row=row_idx, column=col_l_idx)
+        cell_bq = ws.cell(row=row_idx, column=col_bq_idx)
         cell_cc = ws.cell(row=row_idx, column=col_cc_idx)
 
         # F列の現在値を取得
         f_value = str(cell_f.value).strip() if cell_f.value is not None else ''
+
+        # BQ列（注文取消伝票発行フラグ）が0以外の場合は発注取消済み
+        bq_value = cell_bq.value
+        bq_str = str(bq_value).strip() if bq_value is not None else ''
+        is_bq_canceled = bq_str != '' and bq_str != '0'
+
+        if is_bq_canceled:
+            stats['bq_canceled'] += 1
+            # F列に値があれば維持、なければ「EJ発注取消済み」を設定
+            if f_value == '':
+                cell_f.value = "EJ発注取消済み"
+            # 背景を灰色に
+            cell_f.fill = FILL_LIGHT_GRAY
+            stats['excluded_gray'] += 1
+            continue
+
+        # G列（LINENO）に値がある場合はスキップ（rBOMからデータ取得済みの可能性が高い）
+        g_value = cell_g.value
+        if g_value is not None and str(g_value).strip() != '':
+            stats['g_has_value'] += 1
+            continue
 
         # F列が「rBOMで対応する発注の入力をお願いします」の場合は一旦クリア
         if f_value == 'rBOMで対応する発注の入力をお願いします':
@@ -1045,8 +1088,10 @@ def mark_auto_input_exclusions(excel_path):
     print("自動インプット除外判定結果")
     print("-" * 40)
     print(f"全行数: {stats['total']}行")
+    print(f"  G列に値あり（スキップ）: {stats['g_has_value']}行")
     print(f"  F列クリア（再判定）: {stats['f_cleared']}行")
     print(f"  F列に数字あり（スキップ）: {stats['skipped']}行")
+    print(f"  除外: EJ発注取消済み(BQ列): {stats['bq_canceled']}行")
     print(f"  除外: 工程発注(A列): {stats['a_not_empty']}行")
     print(f"  除外: 品目番号なし(L列): {stats['l_empty']}行")
     print(f"  除外: 取引先不一致/赤(K列): {stats['k_red']}行")

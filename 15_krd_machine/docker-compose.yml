@@ -1,4 +1,5 @@
 services:
+  # MySQL → SQLite 同期処理（cron）
   krd-sync-app:
     build: .
     container_name: krd-sync-app
@@ -9,6 +10,8 @@ services:
       # ローカルディレクトリ（SQLiteデータベースとログ）
       - ./db:/app/db
       - ./logs:/app/logs
+      # DBコピー先（共有フォルダ）
+      - /home/docker-user/KakouDenpyo:/home/docker-user/KakouDenpyo
 
     # ホスト名解決の設定（KRD MySQLサーバー）
     extra_hosts:
@@ -28,3 +31,33 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+    networks:
+      - app-shared-net
+
+  # KRD データ管理画面（Streamlit）
+  krd-data-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: krd-data-app
+    restart: unless-stopped
+    ports:
+      - "8509:8509"
+    volumes:
+      # SQLiteデータベース（同期アプリと共有）
+      - ./db:/app/db
+
+    # ログ設定
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - app-shared-net
+
+networks:
+  app-shared-net:
+    external: true

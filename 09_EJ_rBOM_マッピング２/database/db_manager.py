@@ -435,6 +435,49 @@ class DatabaseManager:
                 ))
                 insert_count += 1
 
+                # D3360マッピング（is_d3360_mapping=True）はfixed_mappingsにも保存
+                if result.get('is_d3360_mapping', False) and result.get('is_fixed', False):
+                    # 既存レコードがあれば削除（UPSERT的な処理）
+                    ej_order_no = result.get('ej_order_no')
+                    rbom_order_no = result.get('rbom_order_no')
+                    rbom_line_no_val = int(result.get('rbom_line_no')) if pd.notna(result.get('rbom_line_no')) else None
+
+                    cursor.execute("""
+                        DELETE FROM fixed_mappings
+                        WHERE ej_order_no = ? AND rbom_order_no = ? AND rbom_line_no = ?
+                    """, (ej_order_no, rbom_order_no, rbom_line_no_val))
+
+                    cursor.execute("""
+                        INSERT INTO fixed_mappings (
+                            ej_order_no, ej_item_code, ej_item_name, ej_quantity, ej_status, ej_purch_odr_typ, ej_delivery_date, ej_vend_cd,
+                            rbom_order_no, rbom_line_no, rbom_item_code, rbom_item_name,
+                            rbom_quantity, rbom_delivery_date, rbom_seino, rbom_ktcd, rbom_srcd, mk020_note,
+                            ej_m_sequence, rbom_m_sequence, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        ej_order_no,
+                        result.get('ej_item_code'),
+                        result.get('ej_item_name'),
+                        result.get('ej_quantity'),
+                        result.get('ej_status'),
+                        result.get('ej_purch_odr_typ'),
+                        result.get('ej_delivery_date'),
+                        result.get('ej_vend_cd'),
+                        rbom_order_no,
+                        rbom_line_no_val,
+                        result.get('rbom_item_code'),
+                        result.get('rbom_item_name'),
+                        result.get('rbom_quantity'),
+                        result.get('rbom_delivery_date'),
+                        result.get('rbom_seino'),
+                        result.get('rbom_ktcd'),
+                        result.get('rbom_srcd'),
+                        result.get('mk020_note'),
+                        ej_m_seq,
+                        rbom_m_seq,
+                        status_value
+                    ))
+
             commit_start = datetime.now()
             conn.commit()
             logger.debug(f"  コミット完了 ({(datetime.now() - commit_start).total_seconds():.3f}秒)")
@@ -506,7 +549,7 @@ class DatabaseManager:
                 clean_data.get('mk020_note'),
                 ej_m_seq,  # EJ発注番号がNoneならNone、それ以外は1
                 rbom_m_seq,  # rBOM発注番号がNoneならNone、それ以外は1
-                ''  # status 空欄
+                clean_data.get('status', '')  # statusを保持（固定マッピング時に元のstatusを引き継ぐ）
             ))
             conn.commit()
     
@@ -669,7 +712,7 @@ class DatabaseManager:
                             clean_data.get('rbom_quantity'), clean_data.get('rbom_delivery_date'),
                             clean_data.get('rbom_seino'), clean_data.get('rbom_ktcd'), clean_data.get('rbom_srcd'),
                             clean_data.get('mk020_note'),
-                            ej_m_seq, rbom_m_seq, ''
+                            ej_m_seq, rbom_m_seq, clean_data.get('status', '')
                         ))
                         insert_count += 1
                     else:

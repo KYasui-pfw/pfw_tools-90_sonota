@@ -1,16 +1,16 @@
 """
 KRD MySQL → SQLite 低頻度同期スクリプト
 
-genpinhyoシステムで使用されていないテーブルを同期します。
+高頻度同期対象以外のテーブルを同期します。
 1時間ごとにWindows Task Schedulerで実行されることを想定。
 
-同期対象テーブル（44個）:
-    全50テーブル - genpinhyo使用6テーブル
+同期対象テーブル（45個）:
+    全50テーブル - 高頻度同期5テーブル
+    ※ DATA_KOUTEIZUKANはこちらで同期（図番情報、更新頻度低）
 
-除外テーブル（genpinhyo使用6テーブル）:
+除外テーブル（高頻度同期5テーブル）:
     - DATA_ASP2_PUT
     - MSTR_PROCODESTR
-    - DATA_KOUTEIZUKAN
     - MSTR_METAL
     - DATA_RES_CAPA
     - MSTR_RES
@@ -23,6 +23,7 @@ genpinhyoシステムで使用されていないテーブルを同期します�
     - 更新戦略: 全件置き換え（DELETE & INSERT）
     - エラー処理: ログ記録のみ（処理継続）
     - ログ: 日次ローテーション、7日間保持
+    - 12月以降も継続運用（DATA_KOUTEIZUKANはgenpinhyo必須）
 """
 
 import sqlite3
@@ -55,7 +56,8 @@ SQLITE_DB_PATH = os.path.join(os.path.dirname(__file__), 'db', 'krd_machine.db')
 LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# 除外テーブル（genpinhyo使用テーブル）
+# 除外テーブル（高頻度同期テーブル）
+# ※ DATA_KOUTEIZUKANは低頻度でOKなのでこちらで同期
 EXCLUDE_TABLES = [
     'DATA_ASP2_PUT',
     'MSTR_PROCODESTR',

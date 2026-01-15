@@ -308,6 +308,61 @@ def show_deleted_task_detail(task):
     else:
         st.info("詳細情報はありません")
 
+# メモ欄セクション（3分割）
+st.markdown("---")
+
+# セッション状態の初期化（DBから読み込み）
+if 'board_memo_1' not in st.session_state:
+    st.session_state.board_memo_1 = db_manager.get_board_memo(1)
+if 'board_memo_2' not in st.session_state:
+    st.session_state.board_memo_2 = db_manager.get_board_memo(2)
+if 'board_memo_3' not in st.session_state:
+    st.session_state.board_memo_3 = db_manager.get_board_memo(3)
+
+memo_cols = st.columns(3)
+
+with memo_cols[0]:
+    st.markdown("**メモ1**")
+    memo_content_1 = st.text_area(
+        "メモ1",
+        value=st.session_state.board_memo_1,
+        height=200,
+        key="memo_input_1",
+        placeholder="メモ1",
+        label_visibility="collapsed"
+    )
+    if memo_content_1 != st.session_state.board_memo_1:
+        db_manager.update_board_memo(1, memo_content_1)
+        st.session_state.board_memo_1 = memo_content_1
+
+with memo_cols[1]:
+    st.markdown("**メモ2**")
+    memo_content_2 = st.text_area(
+        "メモ2",
+        value=st.session_state.board_memo_2,
+        height=200,
+        key="memo_input_2",
+        placeholder="メモ2",
+        label_visibility="collapsed"
+    )
+    if memo_content_2 != st.session_state.board_memo_2:
+        db_manager.update_board_memo(2, memo_content_2)
+        st.session_state.board_memo_2 = memo_content_2
+
+with memo_cols[2]:
+    st.markdown("**メモ3**")
+    memo_content_3 = st.text_area(
+        "メモ3",
+        value=st.session_state.board_memo_3,
+        height=200,
+        key="memo_input_3",
+        placeholder="メモ3",
+        label_visibility="collapsed"
+    )
+    if memo_content_3 != st.session_state.board_memo_3:
+        db_manager.update_board_memo(3, memo_content_3)
+        st.session_state.board_memo_3 = memo_content_3
+
 # 削除済みタスク検索セクション
 st.markdown("---")
 with st.expander("🗑️ 削除済みタスク検索"):

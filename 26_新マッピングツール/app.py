@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 import os
+import configparser
 
 import streamlit as st
 import pandas as pd
@@ -17,10 +18,28 @@ import oracledb
 # 設定
 SCRIPT_DIR = Path(__file__).parent
 DB_PATH = SCRIPT_DIR / "mapping.db"
+CONFIG_PATH = SCRIPT_DIR / "config.ini"
 
 # rBOM API設定
 API_URL = "http://pfw-api/query"
 API_KEY = "oG5^Ls%#20yq"
+
+
+def get_exclude_ej_orders():
+    """config.iniから除外するEJ発注番号リストを取得"""
+    if not CONFIG_PATH.exists():
+        return set()
+    try:
+        config = configparser.ConfigParser()
+        config.read(CONFIG_PATH, encoding='utf-8')
+        exclude_str = config.get('price_mismatch', 'exclude_ej_orders', fallback='')
+        if not exclude_str.strip():
+            return set()
+        # カンマ区切りで分割し、空白を除去
+        exclude_list = [x.strip() for x in exclude_str.split(',') if x.strip()]
+        return set(exclude_list)
+    except Exception:
+        return set()
 
 st.set_page_config(
     page_title="EJ⇔rBOM発注マッピング情報",
@@ -330,6 +349,61 @@ def fetch_all_pages(table, columns, headers):
     return all_data, None
 
 
+def get_d3360_data_by_orders(pono_lineno_list):
+    """D3360（受入明細F）からPONO+POLINENOでデータを取得
+
+    同じPONO+POLINENO+PRICEの場合はRCVQTYを合計して1行に集約
+    PRICEが異なる場合は複数行で返す
+    """
+    if not pono_lineno_list:
+        return pd.DataFrame()
+
+    headers = {
+        "X-API-KEY": API_KEY,
+        "accept": "application/json",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        # D3360から受入数と単価を取得（全件）
+        data_d3360, err = fetch_all_pages("D3360", ["PONO", "POLINENO", "RCVQTY", "PRICE"], headers)
+        if err:
+            return pd.DataFrame()
+
+        df_d3360 = pd.DataFrame(data_d3360)
+        if df_d3360.empty:
+            return pd.DataFrame()
+
+        # 指定されたPONO+POLINENOのみ抽出
+        pono_lineno_set = set([(str(p), int(l)) for p, l in pono_lineno_list])
+        df_d3360["_key"] = list(zip(df_d3360["PONO"].astype(str), df_d3360["POLINENO"].astype(int)))
+        df_filtered = df_d3360[df_d3360["_key"].isin(pono_lineno_set)].copy()
+        df_filtered = df_filtered.drop(columns=["_key"])
+
+        if df_filtered.empty:
+            return pd.DataFrame()
+
+        # PONO+POLINENO+PRICEでグループ化し、RCVQTYを合計
+        df_filtered['RCVQTY'] = pd.to_numeric(df_filtered['RCVQTY'], errors='coerce').fillna(0)
+        df_filtered['PRICE'] = pd.to_numeric(df_filtered['PRICE'], errors='coerce')
+
+        df_grouped = df_filtered.groupby(['PONO', 'POLINENO', 'PRICE'], as_index=False).agg({
+            'RCVQTY': 'sum'
+        })
+
+        # カラム名を変換
+        df_grouped = df_grouped.rename(columns={
+            "PONO": "rbom_order_no",
+            "POLINENO": "rbom_line_no",
+            "RCVQTY": "d3360_rcvqty",
+            "PRICE": "d3360_price"
+        })
+
+        return df_grouped
+    except Exception:
+        return pd.DataFrame()
+
+
 def get_rbom_data_by_orders(pono_lineno_list):
     """rBOM発注番号+行番号リストからrBOMデータを取得"""
     if not pono_lineno_list:
@@ -347,8 +421,8 @@ def get_rbom_data_by_orders(pono_lineno_list):
         if err_d3330:
             return pd.DataFrame(), err_d3330
 
-        # D3340（品目コード、希望納期、発注数、単価）- 全件取得
-        data_d3340, err_d3340 = fetch_all_pages("D3340", ["PONO", "LINENO", "HMCD", "DRVDT", "THQTY", "PRICE"], headers)
+        # D3340（品目コード、希望納期、発注数、単価、状態）- 全件取得
+        data_d3340, err_d3340 = fetch_all_pages("D3340", ["PONO", "LINENO", "HMCD", "DRVDT", "THQTY", "PRICE", "STATUS"], headers)
         if err_d3340:
             return pd.DataFrame(), err_d3340
 
@@ -381,7 +455,8 @@ def get_rbom_data_by_orders(pono_lineno_list):
             "HMCD": "rbom_hmcd",
             "DRVDT": "rbom_drvdt",
             "THQTY": "rbom_qty",
-            "PRICE": "rbom_price"
+            "PRICE": "rbom_price",
+            "STATUS": "rbom_status"
         })
 
         # 日付変換
@@ -466,6 +541,33 @@ def check_item_differences(period_filter=None):
     # 品目コード不一致
     mask_hmcd = df_valid['ej_hmcd'].astype(str) != df_valid['rbom_hmcd'].astype(str)
     df_hmcd = df_valid[mask_hmcd][['ej_order_no', 'rbom_order_no', 'rbom_line_no', 'ej_hmcd', 'rbom_hmcd']].copy()
+
+    # MK020のNOTEと照合して除外判定
+    if not df_hmcd.empty:
+        # MK020からOYAHMCDとNOTEを取得
+        headers_mk020 = {
+            "X-API-KEY": API_KEY,
+            "accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        mk020_data, mk020_err = fetch_all_pages("MK020", ["OYAHMCD", "NOTE"], headers_mk020)
+        if mk020_data and not mk020_err:
+            df_mk020 = pd.DataFrame(mk020_data)
+            # OYAHMCDごとにNOTEをリスト化（同じOYAHMCDに複数行ある場合）
+            df_mk020['NOTE'] = df_mk020['NOTE'].fillna('').astype(str)
+            mk020_notes = df_mk020.groupby('OYAHMCD')['NOTE'].apply(set).to_dict()
+
+            # 除外判定: rbom_hmcd（OYAHMCD）に紐づくNOTEの中にej_hmcdが含まれていれば除外
+            def should_exclude(row):
+                rbom_hmcd = str(row['rbom_hmcd'])
+                ej_hmcd = str(row['ej_hmcd'])
+                notes = mk020_notes.get(rbom_hmcd, set())
+                return ej_hmcd in notes
+
+            mask_exclude = df_hmcd.apply(should_exclude, axis=1)
+            df_hmcd = df_hmcd[~mask_exclude].copy()
+
+    df_hmcd = df_hmcd[['ej_order_no', 'rbom_order_no', 'rbom_line_no', 'ej_hmcd', 'rbom_hmcd']]
     df_hmcd.columns = ['EJ発注番号', 'rBOM発注番号', 'rBOM行番号', 'EJ品目コード', 'rBOM品目コード']
     results['品目コード不一致'] = df_hmcd
 
@@ -487,8 +589,103 @@ def check_item_differences(period_filter=None):
     df_valid['ej_price_float'] = pd.to_numeric(df_valid['ej_price'], errors='coerce')
     df_valid['rbom_price_float'] = pd.to_numeric(df_valid['rbom_price'], errors='coerce')
     mask_price = df_valid['ej_price_float'] != df_valid['rbom_price_float']
-    df_price = df_valid[mask_price][['ej_order_no', 'rbom_order_no', 'rbom_line_no', 'ej_price', 'rbom_price']].copy()
-    df_price.columns = ['EJ発注番号', 'rBOM発注番号', 'rBOM行番号', 'EJ単価', 'rBOM単価']
+    df_price = df_valid[mask_price][['ej_order_no', 'rbom_order_no', 'rbom_line_no', 'ej_price', 'rbom_price', 'ej_qty', 'rbom_status']].copy()
+
+    # D3360（受入明細）からデータを取得して結合
+    if not df_price.empty:
+        price_pono_lineno_list = [
+            (row['rbom_order_no'], int(row['rbom_line_no']))
+            for _, row in df_price.iterrows()
+            if pd.notna(row['rbom_order_no']) and pd.notna(row['rbom_line_no'])
+        ]
+        df_d3360 = get_d3360_data_by_orders(price_pono_lineno_list)
+
+        if not df_d3360.empty:
+            # rbom_line_noをintに変換して結合
+            df_price['rbom_line_no'] = df_price['rbom_line_no'].astype(int)
+            df_d3360['rbom_line_no'] = df_d3360['rbom_line_no'].astype(int)
+            # D3360は同じPONO+LINENOで複数行（PRICEが異なる場合）があるのでleft join
+            df_price = df_price.merge(df_d3360, on=['rbom_order_no', 'rbom_line_no'], how='left')
+
+            # 同じEJ発注番号のrBOM受入_受入数の合計を計算
+            df_price['d3360_rcvqty_numeric'] = pd.to_numeric(df_price['d3360_rcvqty'], errors='coerce').fillna(0)
+            ej_rcvqty_sum = df_price.groupby('ej_order_no')['d3360_rcvqty_numeric'].transform('sum')
+            df_price['d3360_rcvqty_total'] = ej_rcvqty_sum
+            df_price = df_price.drop(columns=['d3360_rcvqty_numeric'])
+
+            # 「不一致の中の一致データ」の発注数合計を計算（除外判定に使用するため先に計算）
+            # EJ発注番号に対して、EJ単価=D3340.PRICEとなるマッピングのTHQTYを合計
+            mismatch_ej_orders = df_price['ej_order_no'].unique().tolist()
+            df_all_mapped_for_ej = df_mapped[df_mapped['ej_order_no'].isin(mismatch_ej_orders)].copy()
+            if not df_all_mapped_for_ej.empty:
+                # df_rbomにはrbom_price（D3340.PRICE）とrbom_qty（D3340.THQTY）が含まれている
+                df_all_mapped_for_ej = df_all_mapped_for_ej.merge(
+                    df_ej[['ej_order_no', 'ej_price']].drop_duplicates(),
+                    on='ej_order_no', how='left'
+                )
+                df_all_mapped_for_ej['rbom_line_no'] = df_all_mapped_for_ej['rbom_line_no'].astype(int)
+                df_all_mapped_for_ej = df_all_mapped_for_ej.merge(
+                    df_rbom[['rbom_order_no', 'rbom_line_no', 'rbom_price', 'rbom_qty']],
+                    on=['rbom_order_no', 'rbom_line_no'], how='left'
+                )
+                # EJ単価 = D3340.PRICE となるレコードを抽出
+                ej_price_all = pd.to_numeric(df_all_mapped_for_ej['ej_price'], errors='coerce')
+                rbom_price_all = pd.to_numeric(df_all_mapped_for_ej['rbom_price'], errors='coerce')
+                mask_price_match = ej_price_all == rbom_price_all
+                df_matched = df_all_mapped_for_ej[mask_price_match].copy()
+                # EJ発注番号ごとにTHQTYを合計
+                if not df_matched.empty:
+                    df_matched['rbom_qty_numeric'] = pd.to_numeric(df_matched['rbom_qty'], errors='coerce').fillna(0)
+                    matched_qty_sum = df_matched.groupby('ej_order_no')['rbom_qty_numeric'].sum().reset_index()
+                    matched_qty_sum.columns = ['ej_order_no', 'matched_qty_total']
+                    df_price = df_price.merge(matched_qty_sum, on='ej_order_no', how='left')
+                else:
+                    df_price['matched_qty_total'] = 0
+            else:
+                df_price['matched_qty_total'] = 0
+
+            # matched_qty_totalのNaNを0に変換
+            df_price['matched_qty_total'] = pd.to_numeric(df_price['matched_qty_total'], errors='coerce').fillna(0)
+
+            # EJ単価=D3360単価 かつ EJ発注数量=(rBOM_受入合計+一致単価発注数合計) の行を除外
+            ej_price_float = pd.to_numeric(df_price['ej_price'], errors='coerce')
+            d3360_price_float = pd.to_numeric(df_price['d3360_price'], errors='coerce')
+            ej_qty_float = pd.to_numeric(df_price['ej_qty'], errors='coerce')
+            d3360_rcvqty_total_float = pd.to_numeric(df_price['d3360_rcvqty_total'], errors='coerce').fillna(0)
+            matched_qty_total_float = pd.to_numeric(df_price['matched_qty_total'], errors='coerce').fillna(0)
+            combined_total = d3360_rcvqty_total_float + matched_qty_total_float
+            mask_exclude = (ej_price_float == d3360_price_float) & (ej_qty_float == combined_total)
+            df_price = df_price[~mask_exclude].copy()
+
+            # STATUSを日本語に変換
+            status_map = {'2': '承認済み', '3': '一部完納', '4': '完納', '8': '強制完納'}
+            df_price['rbom_status'] = df_price['rbom_status'].astype(str).map(lambda x: status_map.get(x, x))
+
+            # 列順序を調整（状態を一番右に）
+            df_price = df_price[['ej_order_no', 'rbom_order_no', 'rbom_line_no', 'ej_price', 'rbom_price', 'ej_qty', 'd3360_price', 'd3360_rcvqty', 'd3360_rcvqty_total', 'matched_qty_total', 'rbom_status']]
+            df_price.columns = ['EJ発注番号', 'rBOM発注番号', 'rBOM行番号', 'EJ単価', 'rBOM単価', 'EJ発注数量', 'rBOM受入_単価', 'rBOM受入_受入数', 'rBOM_受入合計', '一致単価発注数合計', '状態']
+        else:
+            df_price['d3360_price'] = None
+            df_price['d3360_rcvqty'] = None
+            df_price['d3360_rcvqty_total'] = None
+            df_price['matched_qty_total'] = None
+            # STATUSを日本語に変換
+            status_map = {'2': '承認済み', '3': '一部完納', '4': '完納', '8': '強制完納'}
+            df_price['rbom_status'] = df_price['rbom_status'].astype(str).map(lambda x: status_map.get(x, x))
+            # 列順序を調整（状態を一番右に）
+            df_price = df_price[['ej_order_no', 'rbom_order_no', 'rbom_line_no', 'ej_price', 'rbom_price', 'ej_qty', 'd3360_price', 'd3360_rcvqty', 'd3360_rcvqty_total', 'matched_qty_total', 'rbom_status']]
+            df_price.columns = ['EJ発注番号', 'rBOM発注番号', 'rBOM行番号', 'EJ単価', 'rBOM単価', 'EJ発注数量', 'rBOM受入_単価', 'rBOM受入_受入数', 'rBOM_受入合計', '一致単価発注数合計', '状態']
+    else:
+        # STATUSを日本語に変換
+        status_map = {'2': '承認済み', '3': '一部完納', '4': '完納', '8': '強制完納'}
+        df_price['rbom_status'] = df_price['rbom_status'].astype(str).map(lambda x: status_map.get(x, x))
+        df_price.columns = ['EJ発注番号', 'rBOM発注番号', 'rBOM行番号', 'EJ単価', 'rBOM単価', 'EJ発注数量', '状態']
+
+    # config.iniで指定された除外EJ発注番号をフィルタリング
+    exclude_ej_set = get_exclude_ej_orders()
+    if exclude_ej_set and not df_price.empty:
+        df_price = df_price[~df_price['EJ発注番号'].astype(str).isin(exclude_ej_set)].copy()
+
     results['単価不一致'] = df_price
 
     # EJ発注情報削除対象（EJで取得できなかった発注番号）
@@ -516,36 +713,20 @@ def check_duplicate_orders():
         "Content-Type": "application/json"
     }
 
-    # D3330から仕入先コード、入力担当者、担当者コード取得
-    payload_d3330 = {
-        "table": "D3330",
-        "columns": ["PONO", "SRCD", "UPDTID", "TANCD"],
-        "limit": 10000
-    }
-
-    try:
-        response = requests.post(API_URL, headers=headers, json=payload_d3330, timeout=60)
-        response.raise_for_status()
-        df_d3330 = pd.DataFrame(response.json().get("rows", []))
-    except Exception as e:
-        return None, f"D3330取得エラー: {e}"
+    # D3330から仕入先コード、入力担当者、担当者コード取得（全件）
+    d3330_data, err = fetch_all_pages("D3330", ["PONO", "SRCD", "UPDTID", "TANCD"], headers)
+    if err:
+        return None, f"D3330取得エラー: {err}"
+    df_d3330 = pd.DataFrame(d3330_data)
 
     if df_d3330.empty:
         return None, "D3330データがありません"
 
-    # D3340から品目コード、希望納期、発注数、単価取得
-    payload_d3340 = {
-        "table": "D3340",
-        "columns": ["PONO", "LINENO", "HMCD", "DRVDT", "THQTY", "PRICE"],
-        "limit": 10000
-    }
-
-    try:
-        response = requests.post(API_URL, headers=headers, json=payload_d3340, timeout=60)
-        response.raise_for_status()
-        df_d3340 = pd.DataFrame(response.json().get("rows", []))
-    except Exception as e:
-        return None, f"D3340取得エラー: {e}"
+    # D3340から品目コード、希望納期、発注数、単価、備考取得（全件）
+    d3340_data, err = fetch_all_pages("D3340", ["PONO", "LINENO", "HMCD", "DRVDT", "THQTY", "PRICE", "NOTE"], headers)
+    if err:
+        return None, f"D3340取得エラー: {err}"
+    df_d3340 = pd.DataFrame(d3340_data)
 
     if df_d3340.empty:
         return None, "D3340データがありません"
@@ -581,6 +762,12 @@ def check_duplicate_orders():
         return ", ".join(targets) if targets else ""
 
     df_duplicates["DUP_TARGET"] = df_duplicates.apply(get_dup_targets, axis=1)
+
+    # 重複連番を作成（同じdup_keyを持つ行に同じ番号を振る）
+    unique_dup_keys = df_duplicates["dup_key"].unique()
+    dup_key_to_no = {key: i + 1 for i, key in enumerate(unique_dup_keys)}
+    df_duplicates["DUP_NO"] = df_duplicates["dup_key"].map(dup_key_to_no)
+
     df_duplicates = df_duplicates.drop(columns=["dup_key"])
 
     # 希望納期を日付形式(yyyy-mm-dd)に変換
@@ -589,6 +776,7 @@ def check_duplicate_orders():
 
     # カラム名を日本語に変換
     df_duplicates = df_duplicates.rename(columns={
+        "DUP_NO": "重複No",
         "PONO": "発注番号",
         "LINENO": "行番号",
         "UPDTID": "入力担当者",
@@ -598,15 +786,16 @@ def check_duplicate_orders():
         "DRVDT": "希望納期",
         "THQTY": "発注数",
         "PRICE": "単価",
+        "NOTE": "備考",
         "DUP_TARGET": "重複先"
     })
 
-    # 表示順序を整理
-    display_columns = ["発注番号", "行番号", "重複先", "入力担当者", "担当者コード", "仕入先コード", "品目コード", "希望納期", "発注数", "単価"]
+    # 表示順序を整理（重複Noを発注番号の左に配置、備考を末尾に）
+    display_columns = ["重複No", "発注番号", "行番号", "重複先", "入力担当者", "担当者コード", "仕入先コード", "品目コード", "希望納期", "発注数", "単価", "備考"]
     df_duplicates = df_duplicates[display_columns]
 
-    # 重複キーでソート
-    df_duplicates = df_duplicates.sort_values(by=["担当者コード", "仕入先コード", "品目コード", "希望納期", "発注数", "単価", "発注番号"])
+    # 重複Noでソート（同じ重複グループがまとまる）
+    df_duplicates = df_duplicates.sort_values(by=["重複No", "発注番号"])
 
     return df_duplicates, None
 
@@ -887,8 +1076,8 @@ rBOMの発注のうち、担当者コード、仕入先コード、品目コー�
 
             df_display = df_display.drop(columns=["_is_ok"])
 
-            # 列順序を調整（チェック列を問題なしの右=行番号の後に）
-            cols = ["発注番号", "行番号", "問題なしチェック", "重複先", "入力担当者", "担当者コード", "仕入先コード", "品目コード", "希望納期", "発注数", "単価"]
+            # 列順序を調整（重複Noを発注番号の左に、チェック列を行番号の後に、備考を末尾に）
+            cols = ["重複No", "発注番号", "行番号", "問題なしチェック", "重複先", "入力担当者", "担当者コード", "仕入先コード", "品目コード", "希望納期", "発注数", "単価", "備考"]
             df_display = df_display[cols]
 
             if df_display.empty:
@@ -906,7 +1095,7 @@ rBOMの発注のうち、担当者コード、仕入先コード、品目コー�
                             default=False,
                         )
                     },
-                    disabled=["発注番号", "行番号", "重複先", "入力担当者", "担当者コード", "仕入先コード", "品目コード", "希望納期", "発注数", "単価"],
+                    disabled=["重複No", "発注番号", "行番号", "重複先", "入力担当者", "担当者コード", "仕入先コード", "品目コード", "希望納期", "発注数", "単価", "備考"],
                     key="df_dup_editor"
                 )
 

@@ -84,8 +84,8 @@ try:
     # krdのmachinDBに接続する（SQLite版）
     def krd_data_get(sql):
         # SQLite接続（KRD MySQL → SQLite同期データベース）
-        # \\esrv11\krd_machine\db\krd_machine.db
-        sqlite_db_path = r'\\esrv11\krd_machine\db\krd_machine.db'
+        # \\esrv11\KakouDenpyo\krd_machine.db
+        sqlite_db_path = r'\\esrv11\KakouDenpyo\krd_machine.db'
 
         conn = sqlite3.connect(sqlite_db_path)
         df = pd.read_sql(sql, conn)
@@ -201,7 +201,9 @@ try:
         # ▼▼データの取得と結合処理開始
         # EJから出力されたASPKakouDenpyoを取得
         denpyo_df = pd.read_csv(
-            r"\\172.17.107.102\PrintOutCsv\4.加工\4-03 ASPKakouDenpyo.csv", encoding='CP932')
+            r"\\esrv11\KakouDenpyo\4-03 ASPKakouDenpyo.csv", encoding='CP932')
+        # 新CSVの列名を旧CSVの列名に変換（全角半角の差異を吸収）
+        denpyo_df = denpyo_df.rename(columns={'伝票No': '伝票Ｎｏ'})
 
         # ADD_20241217_0件dataなら抜ける
         if denpyo_df.empty:

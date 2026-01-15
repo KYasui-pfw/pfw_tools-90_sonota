@@ -4,13 +4,14 @@ KRD MySQL → SQLite 高頻度同期スクリプト
 genpinhyoシステムで使用されているテーブルのみを同期します。
 5分ごとにWindows Task Schedulerで実行されることを想定。
 
-同期対象テーブル（6個）:
+同期対象テーブル（5個）:
     - DATA_ASP2_PUT
     - MSTR_PROCODESTR
-    - DATA_KOUTEIZUKAN
     - MSTR_METAL
     - DATA_RES_CAPA
     - MSTR_RES
+
+※ DATA_KOUTEIZUKANは低頻度同期（krd_sync_hourly.py）で処理
 
 実行方法:
     python krd_sync_frequent.py
@@ -366,11 +367,60 @@ def sync_all_tables():
             sqlite_conn.close()
             logger.info("SQLite接続をクローズしました")
 
+# ========== 自動停止チェック ==========
+
+def check_expiration():
+    """
+    有効期限チェック（無効化済み）
+    2025年12月以降も継続運用のため、常にTrueを返す
+    """
+    return True
+
+# ========== DBファイルコピー ==========
+
+def copy_db_to_shared():
+    """
+    krd_machine.db を共有フォルダにコピー
+    Windows: \\esrv11\KakouDenpyo
+    Linux:   /home/docker-user/KakouDenpyo
+    """
+    import shutil
+    import platform
+
+    # コピー先パス（OS判定）
+    if platform.system() == 'Windows':
+        dest_dir = r'\\esrv11\KakouDenpyo'
+    else:
+        dest_dir = '/home/docker-user/KakouDenpyo'
+
+    dest_path = os.path.join(dest_dir, 'krd_machine.db')
+
+    try:
+        # コピー先ディレクトリ存在確認
+        if not os.path.exists(dest_dir):
+            logger.warning(f"コピー先ディレクトリが存在しません: {dest_dir}")
+            return False
+
+        # ファイルコピー
+        shutil.copy2(SQLITE_DB_PATH, dest_path)
+        logger.info(f"DBファイルをコピーしました: {dest_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"DBファイルのコピーに失敗: {e}")
+        return False
+
 # ========== エントリポイント ==========
 
 if __name__ == "__main__":
     try:
-        sync_all_tables()
+        # 有効期限チェック（同期処理のみ停止、コピーは継続）
+        if check_expiration():
+            sync_all_tables()
+
+        # DBファイルコピー（12月以降も常に実行）
+        copy_db_to_shared()
+
     except KeyboardInterrupt:
         logger.info("ユーザーによる中断")
         sys.exit(0)

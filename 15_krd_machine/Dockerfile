@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # スクリプトファイルをコピー
 COPY krd_sync_frequent.py ./
 COPY krd_sync_hourly.py ./
+COPY krd_sync_rbom.py ./
 COPY krd_sqlite_helper.py ./
 
 # エントリーポイントスクリプトをコピー

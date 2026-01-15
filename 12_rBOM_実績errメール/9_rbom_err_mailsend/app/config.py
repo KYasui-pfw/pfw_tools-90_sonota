@@ -35,10 +35,10 @@ class Config:
     MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "rBOM System")
     MAIL_SUBJECT = os.getenv("MAIL_SUBJECT", "【rBOM】実績登録エラー通知")
 
-    # ログ設定
+    # ログ設定（デフォルトはWARNINGで最小限のログ出力）
     LOG_DIR = BASE_DIR / "logs"
     LOG_FILE = LOG_DIR / "monitor.log"
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "WARNING")
 
 
 # 設定のシングルトンインスタンス

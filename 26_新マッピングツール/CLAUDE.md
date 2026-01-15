@@ -15,7 +15,7 @@ PYTHON="C:/Dev/90_tools/09_EJ_rBOM_マッピング２/venv/Scripts/python.exe"
 # メイン処理（サーバーコピー→Excel処理→DB更新）
 $PYTHON update_db.py
 
-# Streamlitアプリ（未完成）
+# Streamlitアプリ（EJ⇔rBOM発注マッピング情報）
 $PYTHON -m streamlit run app.py
 ```
 
@@ -59,6 +59,27 @@ update_db.py
 - `is_red_background()` - 赤背景チェック
 - `mark_auto_input_exclusions()` - 自動インプット除外判定
 - `update_excel_from_d3360()` - D3360突合処理
+
+## Excel列マッピング
+
+### 通常ファイル（Sheet1）
+| 列インデックス | 項目名 | DB列 |
+|---------------|--------|------|
+| 0（A列） | EJ発注番号 | ej_order_no |
+| 3（D列） | EJ品目コード | hmcd |
+| 5（F列） | EJ数 | rbom_quantity |
+| 10（K列） | rBOM発注番号+行番号 | 分割→rbom_order_no, rbom_line_no |
+
+### 12月ファイル（T_RLSD_PUCH_ODR）
+| 列インデックス | 項目名 | DB列 |
+|---------------|--------|------|
+| 5（F列） | rBOM発注番号 | rbom_order_no（必須） |
+| 6（G列） | 行番号 | rbom_line_no |
+| 7（H列） | 連番号 | ej_order_no |
+| 11（L列） | 品目番号 | hmcd（フォールバック） |
+| 12（M列） | 発注数 | rbom_quantity（フォールバック） |
+| 89（CL列） | rBOM品目CD | hmcd |
+| 90（CM列） | rBOM発注数 | rbom_quantity |
 
 ## Database Schema
 
@@ -112,6 +133,36 @@ for row in df_csv.iterrows():
     if 一致:
         matched_rows.add(excel_row)
 ```
+
+## Streamlitアプリ（app.py）
+
+### タブ構成
+
+| タブ | 機能 |
+|-----|------|
+| タブ1 | 2025年12月15日以降の発注マッピング表示 |
+| タブ2 | 2025年11月以前の発注残マッピング表示 |
+| タブ3 | EJ⇔rBOM項目チェック（6項目の不一致検出） |
+| タブ4 | rBOM重複発注チェック |
+
+### タブ3：項目チェックのロジック
+
+EJとrBOMの以下6項目を比較し、不一致を検出：
+- 担当者コード、仕入先コード、品目コード、希望納期、発注数、単価
+
+**品目コード不一致のMK020照合**:
+1. EJ品目コード ≠ rBOM品目コードの行を抽出
+2. MK020テーブルから`OYAHMCD`と`NOTE`を取得
+3. `rBOM品目コード = MK020.OYAHMCD`でJOIN
+4. JOINした`NOTE`の中に`EJ品目コード`が含まれていれば → 不一致から除外
+
+### データソース
+
+| ソース | 用途 |
+|--------|------|
+| mapping.db (SQLite) | マッピング結果 |
+| EJ Oracle (172.17.107.102:1521/EXPJ) | T_RLSD_PUCH_ODR |
+| rBOM API (http://pfw-api/query) | D3330, D3340, D3360, MK020 |
 
 ## Environment Variables (.env)
 

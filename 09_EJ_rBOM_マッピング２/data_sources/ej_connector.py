@@ -103,7 +103,7 @@ class EJConnector:
             FROM EXPJ2.T_RLSD_PUCH_ODR t
             LEFT JOIN EXPJ2.M_ITEM m ON t.ITEM_CD = m.ITEM_CD
             WHERE t.PUCH_ODR_STS_TYP = 2
-            AND t.PUCH_ODR_TYP != 4
+            -- AND t.PUCH_ODR_TYP != 4
             AND t.PUCH_ODR_DLV_DATE >= DATE '2025-11-01'
             AND t.PUCH_ODR_DLV_DATE <= DATE '2027-01-31'
             ORDER BY t.PUCH_ODR_CD

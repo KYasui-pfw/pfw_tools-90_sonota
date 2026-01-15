@@ -19,7 +19,8 @@ class MappingEngine:
     def execute_mapping(self, ej_data: List[Dict], rbom_data: List[Dict], manual_mappings: List[Dict] = None,
                        fixed_mappings: List[Dict] = None,
                        ej_after_rbom_days: int = None, ej_before_rbom_days: int = None,
-                       enable_quantity_diff: bool = False, mk020_data: List[Dict] = None) -> List[Dict]:
+                       enable_quantity_diff: bool = False, mk020_data: List[Dict] = None,
+                       d3360_data: List[Dict] = None) -> List[Dict]:
         """
         マッピング処理を実行（手動マッピング優先 + 固定マッピング考慮版 + 納期条件 + 数量差分処理）
 
@@ -32,6 +33,7 @@ class MappingEngine:
             ej_before_rbom_days: EJ納期がrBOM納期より早い許容日数（Noneの場合は制限なし）
             enable_quantity_diff: 数量差分処理を有効にするか（Trueの場合、連番を増やして差分行を追加）
             mk020_data: MK020マスタデータのリスト（rBOMデータとLEFT JOINしてNOTE取得）
+            d3360_data: D3360受入明細データのリスト（原材料マッピング用：NOTE列からEJ発注番号を抽出）
 
         Returns:
             マッピング結果のリスト
@@ -303,7 +305,113 @@ class MappingEngine:
                 mapping_results.append(result)
 
             logger.info(f"固定マッピング除外完了: {len(mapping_results)}件追加 ({(datetime.now() - start_time).total_seconds():.3f}秒)")
-        
+
+        # 2.5. D3360原材料マッピング処理（固定マッピング除外の後）
+        # D3360のNOTE列から"(原材料)"プレフィックスを除去したEJ発注番号でマッピング
+        # 固定マッピングで除外されたEJは処理対象外となる
+        d3360_mapping_count = 0
+        if d3360_data and not ej_df.empty and not rbom_df.empty:
+            logger.info(f"【フェーズ2.5】D3360原材料マッピング処理開始 - D3360: {len(d3360_data)}件")
+            start_time = datetime.now()
+
+            original_ej_count = len(ej_df)
+            original_rbom_count = len(rbom_df)
+
+            # D3360データをEJ発注番号でグループ化
+            d3360_by_ej_order = {}
+            for d3360_row in d3360_data:
+                ej_order_no = d3360_row.get('ej_order_no')
+                if ej_order_no:
+                    if ej_order_no not in d3360_by_ej_order:
+                        d3360_by_ej_order[ej_order_no] = []
+                    d3360_by_ej_order[ej_order_no].append(d3360_row)
+
+            logger.info(f"  D3360ユニークEJ発注番号数: {len(d3360_by_ej_order)}件")
+
+            # EJデータを走査し、D3360にマッチするものを探す
+            matched_ej_orders = []
+            for _, ej_row in ej_df.iterrows():
+                ej_order_no = ej_row.get('order_no')
+
+                if ej_order_no not in d3360_by_ej_order:
+                    continue
+
+                # D3360にマッチするデータを取得
+                d3360_matches = d3360_by_ej_order[ej_order_no]
+
+                for d3360_row in d3360_matches:
+                    rbom_pono = d3360_row.get('rbom_pono')
+                    rbom_polineno = d3360_row.get('rbom_polineno')
+
+                    if not rbom_pono or rbom_polineno is None:
+                        continue
+
+                    # rBOMデータから対応するレコードを検索
+                    rbom_match = rbom_df[
+                        (rbom_df['order_no'] == rbom_pono) &
+                        (rbom_df['line_no'] == int(rbom_polineno))
+                    ]
+
+                    if rbom_match.empty:
+                        logger.debug(f"  D3360マッピング: rBOM発注番号 {rbom_pono}+{rbom_polineno} が見つかりません")
+                        continue
+
+                    rbom_row = rbom_match.iloc[0]
+
+                    # マッピング結果を作成（ステータス"済"）
+                    ej_series = pd.Series({
+                        'order_no': ej_row['order_no'],
+                        'item_code': ej_row['item_code'],
+                        'item_name': ej_row['item_name'],
+                        'quantity': ej_row['quantity'],
+                        'status': ej_row['status'],
+                        'purch_odr_typ': ej_row['purch_odr_typ'],
+                        'delivery_date': ej_row['delivery_date'],
+                        'vend_cd': ej_row.get('vend_cd')
+                    })
+
+                    rbom_series = pd.Series({
+                        'order_no': rbom_row['order_no'],
+                        'line_no': rbom_row['line_no'],
+                        'item_code': rbom_row['item_code'],
+                        'item_name': rbom_row['item_name'],
+                        'order_quantity': rbom_row['order_quantity'],
+                        'delivery_date': rbom_row['delivery_date'],
+                        'seino': rbom_row['seino'],
+                        'ktcd': rbom_row.get('ktcd'),
+                        'srcd': rbom_row.get('srcd'),
+                        'mk020_note': rbom_row.get('mk020_note')
+                    })
+
+                    result = self._create_mapping_result(ej_series, rbom_series, '自動')
+                    result['status'] = '済'  # D3360原材料マッピングは"済"
+                    result['is_fixed'] = False  # 固定はUIから行う（自動では固定しない）
+                    result['is_d3360_mapping'] = True  # D3360マッピングフラグ
+                    # 共通品目コードの頭に★マークを付与（D3360マッピング識別用）
+                    if result.get('item_code'):
+                        result['item_code'] = '★' + str(result['item_code'])
+                    mapping_results.append(result)
+                    d3360_mapping_count += 1
+
+                    logger.debug(f"  D3360マッピング適用: EJ={ej_order_no} ↔ rBOM={rbom_pono}+{rbom_polineno}")
+
+                    # マッチしたEJ発注番号とrBOMを記録
+                    matched_ej_orders.append(ej_order_no)
+
+                    # マッチしたrBOMを除外
+                    rbom_df = rbom_df[~((rbom_df['order_no'] == rbom_pono) & (rbom_df['line_no'] == int(rbom_polineno)))]
+
+                    # 最初の1件のみマッチ（1つのEJに対して1つのrBOM）
+                    break
+
+            # マッチしたEJデータを除外
+            if matched_ej_orders:
+                ej_df = ej_df[~ej_df['order_no'].isin(matched_ej_orders)]
+
+            logger.debug(f"  EJ除外: {original_ej_count}件 → {len(ej_df)}件 (除外: {original_ej_count - len(ej_df)}件)")
+            logger.debug(f"  rBOM除外: {original_rbom_count}件 → {len(rbom_df)}件 (除外: {original_rbom_count - len(rbom_df)}件)")
+            logger.info(f"D3360原材料マッピング完了: {d3360_mapping_count}件 ({(datetime.now() - start_time).total_seconds():.3f}秒)")
+
         # EJデータとrBOMデータの対応関係を記録
         ej_matched = set()
         rbom_matched = set()
@@ -312,6 +420,22 @@ class MappingEngine:
         if not ej_df.empty and not rbom_df.empty:
             logger.info(f"【フェーズ3】自動マッピング実行開始 - EJ: {len(ej_df)}件 × rBOM: {len(rbom_df)}件")
             start_time = datetime.now()
+
+            # 品目コードが空欄のレコードを自動マッピング対象外にする（手動マッピングのみ対象）
+            ej_original_count = len(ej_df)
+            rbom_original_count = len(rbom_df)
+
+            # EJ品目コードが空欄のレコードを除外（None、空文字、空白のみを除外）
+            ej_df = ej_df[ej_df['item_code'].notna() & (ej_df['item_code'].astype(str).str.strip() != '')]
+            ej_excluded_count = ej_original_count - len(ej_df)
+            if ej_excluded_count > 0:
+                logger.info(f"  EJ品目コード空欄除外: {ej_original_count}件 → {len(ej_df)}件 (除外: {ej_excluded_count}件)")
+
+            # rBOM品目コードが空欄のレコードを除外（None、空文字、空白のみを除外）
+            rbom_df = rbom_df[rbom_df['item_code'].notna() & (rbom_df['item_code'].astype(str).str.strip() != '')]
+            rbom_excluded_count = rbom_original_count - len(rbom_df)
+            if rbom_excluded_count > 0:
+                logger.info(f"  rBOM品目コード空欄除外: {rbom_original_count}件 → {len(rbom_df)}件 (除外: {rbom_excluded_count}件)")
 
             # データ準備とソート
             sort_start = datetime.now()

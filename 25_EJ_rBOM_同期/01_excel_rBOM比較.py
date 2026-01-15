@@ -96,7 +96,9 @@ def copy_and_merge_maekotei_csv():
 
 
 def copy_excel_file():
-    """Excelファイルをコピー（上書き）"""
+    """Excelファイルをコピー（上書き）、サーバーファイルのタイムスタンプも返す"""
+    import os
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     dest_path = OUTPUT_DIR / "発注情報.xlsx"
@@ -104,10 +106,67 @@ def copy_excel_file():
     print(f"コピー元: {SOURCE_EXCEL}")
     print(f"コピー先: {dest_path}")
 
-    shutil.copy2(SOURCE_EXCEL, dest_path)
-    print("Excelファイルのコピー完了")
+    # 1. サーバーファイルのタイムスタンプを記録（書き戻し判定用）
+    server_mtime = None
+    try:
+        server_mtime = os.path.getmtime(SOURCE_EXCEL)
+    except (FileNotFoundError, PermissionError, OSError):
+        pass  # タイムスタンプ取得失敗は無視
 
-    return dest_path
+    # 2. サーバーからファイルをコピー（エラーでも続行）
+    try:
+        shutil.copy2(SOURCE_EXCEL, dest_path)
+        print("Excelファイルのコピー完了")
+    except PermissionError:
+        print(f"[WARN] サーバーファイルが使用中のためコピーできません: {SOURCE_EXCEL}")
+        if dest_path.exists():
+            print(f"       ローカルファイルを使用: {dest_path}")
+        else:
+            raise FileNotFoundError(f"ローカルファイルもありません: {dest_path}")
+
+    return dest_path, server_mtime
+
+
+def copy_to_server(local_path, server_path: str, original_mtime):
+    """処理済みExcelをサーバーに書き戻し（タイムスタンプチェック付き）
+
+    Args:
+        local_path: ローカルの処理済みファイル
+        server_path: サーバーのファイルパス
+        original_mtime: コピー前に記録したサーバーファイルのタイムスタンプ（Noneの場合はスキップ）
+    """
+    import os
+
+    print("\n" + "=" * 60)
+    print("サーバーへExcel書き戻し")
+    print("=" * 60)
+
+    # タイムスタンプが取得できなかった場合はスキップ
+    if original_mtime is None:
+        print("[SKIP] サーバーへの書き戻しをスキップ（タイムスタンプ取得不可）")
+        return
+
+    try:
+        # 現在のサーバーファイルのタイムスタンプを確認
+        current_mtime = os.path.getmtime(server_path)
+
+        if current_mtime != original_mtime:
+            # タイムスタンプが変更されている = 誰かが更新した
+            original_time = datetime.fromtimestamp(original_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            current_time = datetime.fromtimestamp(current_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            print(f"[SKIP] サーバーファイルが更新されています（上書きしません）")
+            print(f"       コピー時: {original_time}")
+            print(f"       現在:     {current_time}")
+            return
+
+        # 上書きコピー
+        shutil.copy2(local_path, server_path)
+        print(f"[OK] サーバーに書き戻し完了: {server_path}")
+
+    except PermissionError:
+        print(f"[SKIP] ファイルが編集中のため上書きできません: {server_path}")
+    except Exception as e:
+        print(f"[ERROR] サーバーへの書き戻しに失敗しました: {e}")
 
 
 def extract_mapped_rows(excel_path):
@@ -255,6 +314,7 @@ def update_excel_with_results(excel_path):
 
     updated_count = 0
     mismatch_count = 0
+    matched_rows = set()  # 一致済み（水色）の行を追跡
 
     for csv_path in csv_files:
         if not csv_path.exists():
@@ -281,6 +341,10 @@ def update_excel_with_results(excel_path):
 
             excel_row = order_to_row[order_no]
 
+            # 既に一致済み（水色）の行はスキップ
+            if excel_row in matched_rows:
+                continue
+
             # F列（rBOM発注番号）の処理
             cell_f = ws.cell(row=excel_row, column=col_f_idx)
             existing_f = cell_f.value
@@ -295,13 +359,19 @@ def update_excel_with_results(excel_path):
             else:
                 new_f = ''
 
-            # 既存値との比較（「rBOMで対応する発注の入力をお願いします」も空欄扱い）
-            is_empty_or_placeholder = existing_f_str == '' or existing_f_str == 'rBOMで対応する発注の入力をお願いします'
-            if is_empty_or_placeholder or existing_f_str == new_f:
-                # F列空欄 or 既存値とPONOが一致 → 水色にして値を設定
+            # 既存値が数値のみかチェック
+            existing_is_numeric = is_numeric_string(existing_f_str)
+
+            if existing_is_numeric and existing_f_str != new_f:
+                # 既存値が数値で、かつ不一致 → 赤色にして上書きしない
+                cell_f.fill = FILL_RED
+                mismatch_count += 1
+            else:
+                # それ以外（空欄/テキスト/一致）→ 水色にして値を設定
                 cell_f.value = new_f
                 cell_f.fill = FILL_LIGHT_BLUE
                 updated_count += 1
+                matched_rows.add(excel_row)  # 一致済みとしてマーク
 
                 # G列（行番号）の更新 - 数値
                 cell_g = ws.cell(row=excel_row, column=col_g_idx)
@@ -313,10 +383,6 @@ def update_excel_with_results(excel_path):
                 else:
                     new_g = ''
                 cell_g.value = new_g
-            else:
-                # 既存値とPONOが不一致 → 赤色にして上書きしない
-                cell_f.fill = FILL_RED
-                mismatch_count += 1
 
     # 保存
     output_excel = OUTPUT_DIR / "発注情報_自動追記.xlsx"
@@ -912,14 +978,27 @@ def is_red_background(cell):
     return False
 
 
+def is_numeric_string(value):
+    """文字列が数字のみで構成されているかチェック（"00000789"等はTrue、"000000011a"等はFalse）"""
+    if value is None:
+        return False
+    s = str(value).strip()
+    if s == '':
+        return False
+    return s.isdigit()
+
+
 def mark_auto_input_exclusions(excel_path):
     """自動インプット対象外の行を判定し、F列に色付けして理由を記述
 
     除外条件:
-    - A列（工程）が空欄でない → 薄いピンク + rBOMで対応する発注の入力をお願いします
-    - L列（品目番号）が空欄 → 薄いピンク + rBOMで対応する発注の入力をお願いします
+    - A列（工程）が空欄でない → 灰色 + 工程発注
+    - L列（品目番号）が空欄 → 灰色 + 品目番号なし
+    - K列（仕入先コード）が赤背景 → 灰色 + 取引先不一致(赤)
     - K列がCA/PT → 灰色 + 取引先CA/PT
     - CC列（勘定科目）が12/33でない → 薄いピンク + rBOMで対応する発注の入力をお願いします
+
+    ※F列に数字のみ（PONOなど）が入っている場合はスキップ（上書きしない）
     """
     print("\n" + "=" * 60)
     print("自動インプット除外判定・マーク処理")
@@ -936,19 +1015,25 @@ def mark_auto_input_exclusions(excel_path):
     # 列インデックス（1始まり）
     col_a_idx = 1    # A列 = 工程
     col_f_idx = 6    # F列 = rBOM発注番号（除外理由を追記）
+    col_g_idx = 7    # G列 = 行番号（LINENO）
     col_k_idx = 11   # K列 = 仕入先コード（取引先コード）
     col_l_idx = 12   # L列 = 品目番号
+    col_bq_idx = 69  # BQ列 = 注文取消伝票発行フラグ
     col_cc_idx = 81  # CC列 = 勘定科目
 
     # 統計
     stats = {
         'total': 0,
+        'excluded_gray': 0,  # 灰色（工程発注/品目番号なし/取引先不一致/CA・PT）
         'excluded_pink': 0,  # 薄いピンク（rBOM対応依頼）
-        'excluded_gray': 0,  # 灰色（CA/PT）
         'target': 0,         # 自動インプット対象
+        'skipped': 0,        # F列に数字があるためスキップ
+        'g_has_value': 0,    # G列に値があるためスキップ
         'a_not_empty': 0,
         'l_empty': 0,
+        'k_red': 0,          # K列赤背景
         'k_ca_pt': 0,
+        'bq_canceled': 0,    # BQ列が0以外（発注取消済み）
         'cc_not_valid': 0,   # 勘定科目が12/33以外
         'f_cleared': 0,      # F列クリア件数
     }
@@ -959,16 +1044,47 @@ def mark_auto_input_exclusions(excel_path):
         # 各セルの値を取得
         cell_a = ws.cell(row=row_idx, column=col_a_idx)
         cell_f = ws.cell(row=row_idx, column=col_f_idx)
+        cell_g = ws.cell(row=row_idx, column=col_g_idx)
         cell_k = ws.cell(row=row_idx, column=col_k_idx)
         cell_l = ws.cell(row=row_idx, column=col_l_idx)
+        cell_bq = ws.cell(row=row_idx, column=col_bq_idx)
         cell_cc = ws.cell(row=row_idx, column=col_cc_idx)
 
-        # F列が「rBOMで対応する発注の入力をお願いします」の場合は一旦クリア
+        # F列の現在値を取得
         f_value = str(cell_f.value).strip() if cell_f.value is not None else ''
+
+        # BQ列（注文取消伝票発行フラグ）が0以外の場合は発注取消済み
+        bq_value = cell_bq.value
+        bq_str = str(bq_value).strip() if bq_value is not None else ''
+        is_bq_canceled = bq_str != '' and bq_str != '0'
+
+        if is_bq_canceled:
+            stats['bq_canceled'] += 1
+            # F列に値があれば維持、なければ「EJ発注取消済み」を設定
+            if f_value == '':
+                cell_f.value = "EJ発注取消済み"
+            # 背景を灰色に
+            cell_f.fill = FILL_LIGHT_GRAY
+            stats['excluded_gray'] += 1
+            continue
+
+        # G列（LINENO）に値がある場合はスキップ（rBOMからデータ取得済みの可能性が高い）
+        g_value = cell_g.value
+        if g_value is not None and str(g_value).strip() != '':
+            stats['g_has_value'] += 1
+            continue
+
+        # F列が「rBOMで対応する発注の入力をお願いします」の場合は一旦クリア
         if f_value == 'rBOMで対応する発注の入力をお願いします':
             cell_f.value = None
             cell_f.fill = PatternFill()  # 塗りつぶしもクリア
+            f_value = ''
             stats['f_cleared'] += 1
+
+        # F列に数字のみ（PONOなど）が入っている場合はスキップ
+        if is_numeric_string(f_value):
+            stats['skipped'] += 1
+            continue
 
         a_value = cell_a.value
         k_value = str(cell_k.value).strip() if cell_k.value is not None else ''
@@ -978,6 +1094,7 @@ def mark_auto_input_exclusions(excel_path):
         # 各条件をチェック
         is_a_not_empty = a_value is not None and str(a_value).strip() != ''
         is_l_empty = l_value is None or str(l_value).strip() == ''
+        is_k_red = is_red_background(cell_k)
         is_ca_pt = k_value.upper() in ['CA', 'PT']
         cc_str = str(cc_value).strip() if cc_value is not None else ''
         is_cc_not_valid = cc_str not in ['12', '33']  # 12または33以外はNG
@@ -987,21 +1104,38 @@ def mark_auto_input_exclusions(excel_path):
             stats['a_not_empty'] += 1
         if is_l_empty:
             stats['l_empty'] += 1
+        if is_k_red:
+            stats['k_red'] += 1
         if is_ca_pt:
             stats['k_ca_pt'] += 1
         if is_cc_not_valid:
             stats['cc_not_valid'] += 1
 
-        # 色分け判定（CA/PTは灰色、それ以外の除外条件は薄いピンク）
-        has_pink_condition = is_a_not_empty or is_l_empty or is_cc_not_valid
+        # 除外理由を判定（優先順位順）- 灰色で表示する条件
+        gray_reason = None
+        if is_a_not_empty:
+            gray_reason = "工程発注"
+        elif is_l_empty:
+            gray_reason = "品目番号なし"
+        elif is_k_red:
+            gray_reason = "取引先不一致(赤)"
+        elif is_ca_pt:
+            gray_reason = "取引先CA/PT"
 
-        if is_ca_pt:
-            # CA/PT → 灰色
-            cell_f.value = "取引先CA/PT"
-            cell_f.fill = FILL_LIGHT_GRAY
-            stats['excluded_gray'] += 1
-        elif has_pink_condition:
-            # 工程発注、品目番号なし、勘定科目12以外 → 薄いピンク
+        if gray_reason:
+            # 灰色条件に該当
+            if gray_reason in ["工程発注", "品目番号なし", "取引先不一致(赤)"]:
+                # これらは薄いピンク + 「rBOMで対応する発注の入力をお願いします」
+                cell_f.value = "rBOMで対応する発注の入力をお願いします"
+                cell_f.fill = FILL_LIGHT_PINK
+                stats['excluded_pink'] += 1
+            else:
+                # 取引先CA/PT → 灰色背景 + 理由を記述
+                cell_f.value = gray_reason
+                cell_f.fill = FILL_LIGHT_GRAY
+                stats['excluded_gray'] += 1
+        elif is_cc_not_valid:
+            # 勘定科目12/33以外 → 薄いピンク + rBOMで対応する発注の入力をお願いします
             cell_f.value = "rBOMで対応する発注の入力をお願いします"
             cell_f.fill = FILL_LIGHT_PINK
             stats['excluded_pink'] += 1
@@ -1017,13 +1151,17 @@ def mark_auto_input_exclusions(excel_path):
     print("自動インプット除外判定結果")
     print("-" * 40)
     print(f"全行数: {stats['total']}行")
+    print(f"  G列に値あり（スキップ）: {stats['g_has_value']}行")
     print(f"  F列クリア（再判定）: {stats['f_cleared']}行")
+    print(f"  F列に数字あり（スキップ）: {stats['skipped']}行")
+    print(f"  除外: EJ発注取消済み(BQ列): {stats['bq_canceled']}行")
     print(f"  除外: 工程発注(A列): {stats['a_not_empty']}行")
     print(f"  除外: 品目番号なし(L列): {stats['l_empty']}行")
+    print(f"  除外: 取引先不一致/赤(K列): {stats['k_red']}行")
     print(f"  除外: 取引先CA/PT(K列): {stats['k_ca_pt']}行")
     print(f"  除外: 勘定科目12/33以外(CC列): {stats['cc_not_valid']}行")
+    print(f"  → 除外（灰色）: {stats['excluded_gray']}行")
     print(f"  → 除外（薄いピンク）: {stats['excluded_pink']}行")
-    print(f"  → 除外（灰色/CA・PT）: {stats['excluded_gray']}行")
     print(f"  → 自動インプット対象: {stats['target']}行")
     print(f"Excel保存完了: {excel_path}")
 
@@ -1039,8 +1177,8 @@ def main():
     # 0. 前工程横展開CSVをコピー・縦結合
     maekotei_csv_path, _ = copy_and_merge_maekotei_csv()
 
-    # 1. Excelファイルをコピー
-    excel_path = copy_excel_file()
+    # 1. Excelファイルをコピー（タイムスタンプも取得）
+    excel_path, server_mtime = copy_excel_file()
 
     # 2-A. F列・H列両方入力済みの行を抽出
     df_excel_both, col_h = extract_mapped_rows(excel_path)
@@ -1079,6 +1217,9 @@ def main():
 
     # 7. 自動インプット除外判定・マーク処理
     mark_auto_input_exclusions(output_excel)
+
+    # 8. サーバーへ書き戻し（タイムスタンプチェック付き）
+    copy_to_server(output_excel, SOURCE_EXCEL, server_mtime)
 
     print("\n" + "=" * 60)
     print("処理完了")

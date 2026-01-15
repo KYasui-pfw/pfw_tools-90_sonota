@@ -27,8 +27,8 @@ try:
   @st.cache_resource
   def krd_data_get(sql):
     # SQLite接続（KRD MySQL → SQLite同期データベース）
-    # \\esrv11\krd_machine\db\krd_machine.db
-    sqlite_db_path = r'\\esrv11\krd_machine\db\krd_machine.db'
+    # \\esrv11\KakouDenpyo\krd_machine.db
+    sqlite_db_path = r'\\esrv11\KakouDenpyo\krd_machine.db'
 
     conn = sqlite3.connect(sqlite_db_path)
     df = pd.read_sql(sql, conn)

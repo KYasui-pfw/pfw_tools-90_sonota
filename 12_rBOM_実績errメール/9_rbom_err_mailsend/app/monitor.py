@@ -2,19 +2,25 @@
 
 import requests
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from typing import List, Dict
 from .config import config
 from .db_manager import DatabaseManager
 from .mail_sender import MailSender
 
-# ロギング設定
+# ロギング設定（ログローテーション: 最大1MB、3世代まで保持）
 config.LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(config.LOG_FILE, encoding='utf-8'),
+        RotatingFileHandler(
+            config.LOG_FILE,
+            maxBytes=1*1024*1024,  # 1MB
+            backupCount=3,
+            encoding='utf-8'
+        ),
         logging.StreamHandler()
     ]
 )

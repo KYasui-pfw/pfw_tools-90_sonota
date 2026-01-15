@@ -8,6 +8,7 @@ from database.db_manager import DatabaseManager
 from data_sources.ej_connector import EJConnector
 from data_sources.rbom_connector import RBOMConnector
 from data_sources.mk020_connector import MK020Connector
+from data_sources.d3360_connector import D3360Connector
 from mapping.mapper import MappingEngine
 from ui.components import render_main_grid
 import os
@@ -386,6 +387,14 @@ def render_mapping_list_page():
                     elapsed = (datetime.now() - start_time).total_seconds()
                     logger.info(f"MK020マスタ取得完了: {len(mk020_data)}件 ({elapsed:.2f}秒)")
 
+                    # 5.5. D3360原材料マッピング用データ取得
+                    logger.info("【ステップ5.5】D3360原材料データ取得開始")
+                    start_time = datetime.now()
+                    d3360_connector = D3360Connector()
+                    d3360_data = d3360_connector.get_d3360_note_data()
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    logger.info(f"D3360原材料データ取得完了: {len(d3360_data)}件 ({elapsed:.2f}秒)")
+
                     # 6. マッピング実行
                     logger.info("【ステップ6】マッピング実行開始")
                     start_time = datetime.now()
@@ -398,7 +407,8 @@ def render_mapping_list_page():
                         ej_after_rbom_days=ej_after_rbom_days,
                         ej_before_rbom_days=ej_before_rbom_days,
                         enable_quantity_diff=enable_quantity_diff,
-                        mk020_data=mk020_data
+                        mk020_data=mk020_data,
+                        d3360_data=d3360_data
                     )
                     # マッピング結果と統計情報を展開
                     mapping_results = mapping_result['mapping_results']
