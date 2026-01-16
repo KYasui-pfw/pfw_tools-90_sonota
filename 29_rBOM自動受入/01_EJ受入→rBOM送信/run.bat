@@ -41,16 +41,38 @@ if errorlevel 1 (
 echo [OK] EJ受入データ変換 完了
 echo.
 
-REM --- 3. rBOM受入送信 ---
-echo [3] rBOM受入送信 実行中...
-"%PYTHON%" "%SCRIPT_DIR%02_rBOM受入送信.py"
+REM --- 3. 送信データ作成 ---
+echo [3] 送信データ作成 実行中...
+"%PYTHON%" "%SCRIPT_DIR%02_送信データ作成.py"
 if errorlevel 1 (
-    echo [ERROR] 02_rBOM受入送信.py でエラーが発生しました
+    echo [ERROR] 02_送信データ作成.py でエラーが発生しました
     pause
     exit /b 1
 )
-echo [OK] rBOM受入送信 完了
+echo [OK] 送信データ作成 完了
 echo.
+
+REM --- 4. 送信データフィルタリング ---
+echo [4] 送信データフィルタリング 実行中...
+"%PYTHON%" "%SCRIPT_DIR%03_送信データフィルタリング.py"
+if errorlevel 1 (
+    echo [ERROR] 03_送信データフィルタリング.py でエラーが発生しました
+    pause
+    exit /b 1
+)
+echo [OK] 送信データフィルタリング 完了
+echo.
+
+REM --- 5. rBOM受入送信 ---
+REMecho [5] rBOM受入送信 実行中...
+REM"%PYTHON%" "%SCRIPT_DIR%04_rBOM受入送信.py"
+REMif errorlevel 1 (
+REM    echo [ERROR] 04_rBOM受入送信.py でエラーが発生しました
+REM    pause
+REM    exit /b 1
+REM)
+REMecho [OK] rBOM受入送信 完了
+REMecho.
 
 echo ============================================================
 echo 全処理完了
