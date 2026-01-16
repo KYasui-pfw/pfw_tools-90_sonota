@@ -218,6 +218,21 @@ def mapping_data():
         df_rbom[rbom_col] = pd.to_numeric(df_rbom[rbom_col], errors="coerce").fillna(0).astype(int)
     logging.info("  数値カラム（必要数,未引当在庫数,手持ち在庫数,出庫済数）を整数に変換")
 
+    # 2025/01/16 追加: マッピング前に払出先=49のデータを除外（EJ・rBOM両方）
+    ej_haraidashi_col = df_ej.columns[12]      # 払出先
+    rbom_haraidashi_col = df_rbom.columns[12]  # 払出先
+
+    ej_before = len(df_ej)
+    df_ej = df_ej[df_ej[ej_haraidashi_col].astype(str) != "49"]
+    ej_excluded = ej_before - len(df_ej)
+
+    rbom_before = len(df_rbom)
+    df_rbom = df_rbom[df_rbom[rbom_haraidashi_col].astype(str) != "49"]
+    rbom_excluded = rbom_before - len(df_rbom)
+
+    logging.info(f"  払出先=49を除外: EJ {ej_excluded}件, rBOM {rbom_excluded}件")
+    logging.info(f"  除外後データ: EJ {len(df_ej)}件, rBOM {len(df_rbom)}件")
+
     # カラム名をインデックスで取得（文字化け対策）
     # インデックス5: 加工部番
     # インデックス10: 製番
@@ -446,6 +461,13 @@ def mapping_data():
     inch_col = df_ej.columns[14]       # 吋
     kishumei_col = df_ej.columns[13]   # 機種名
     seiban_col = df_ej.columns[10]     # 製番
+    haraidashi_col = df_ej.columns[12] # 払出先  # 2025/01/16 追加
+
+    # 2025/01/16 追加: 払出先が49のデータを除外
+    before_count = len(df_merged)
+    df_merged = df_merged[df_merged[haraidashi_col].astype(str) != "49"]
+    excluded_count = before_count - len(df_merged)
+    logging.info(f"  払出先=49のデータを除外: {excluded_count}件")
 
     # 1. 「吋」が空欄の場合は「機種名」も空欄にする
     mask_inch_empty = df_merged[inch_col].isna() | (df_merged[inch_col].astype(str).str.strip() == "")
