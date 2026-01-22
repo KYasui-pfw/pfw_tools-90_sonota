@@ -246,6 +246,204 @@ def fetch_oyalistno_from_api(df, indno_col='伝票No', lineno_col='行番号'):
         return df
 
 
+def filter_qty_zero_from_api(df, indno_col='伝票No', lineno_col='行番号'):
+    """
+    D3420→D3110を参照し、QTY=0の行をフィルタリング（除外）
+
+    処理フロー:
+    1. D3420に INDNO + LINENO で問い合わせ、LISTNO を取得
+    2. D3110に LISTNO で問い合わせ、VERNO が最大の行を取得
+    3. QTY = 0 の行を除外対象とする
+
+    Args:
+        df (pd.DataFrame): 処理対象のDataFrame
+        indno_col (str): INDNO に対応するカラム名
+        lineno_col (str): LINENO に対応するカラム名
+
+    Returns:
+        pd.DataFrame: QTY=0の行を除外したDataFrame
+    """
+    # 環境変数からAPI設定を取得
+    api_base_url = os.getenv('FASTAPI_BASE_URL', 'http://fastapi-rbom-app:8000')
+    read_api_key = os.getenv('READ_API_KEY', '')
+
+    if not read_api_key:
+        logger.error("READ_API_KEY が設定されていません（QTY=0フィルタリングをスキップ）")
+        return df
+
+    original_rows = len(df)
+    logger.info(f"  QTY=0フィルタリング開始: {original_rows:,}行")
+
+    # ユニークな(INDNO, LINENO)ペアを取得
+    unique_keys = []
+    for _, row in df.iterrows():
+        indno = row.get(indno_col)
+        lineno = row.get(lineno_col)
+        if pd.notna(indno) and pd.notna(lineno):
+            unique_keys.append((str(indno), int(lineno)))
+
+    unique_keys = list(set(unique_keys))
+    logger.info(f"    ユニークキー数: {len(unique_keys)}件")
+
+    if not unique_keys:
+        logger.warning("    フィルタリング用のキーが見つかりませんでした")
+        return df
+
+    headers = {
+        "X-API-KEY": read_api_key,
+        "Content-Type": "application/json"
+    }
+
+    # 除外対象の(INDNO, LINENO)ペアを格納
+    exclude_keys = set()
+
+    try:
+        import time
+        overall_start = time.time()
+
+        with httpx.Client(timeout=120.0) as client:
+            # バッチ処理（100件ずつ）
+            batch_size = 100
+            total_batches = (len(unique_keys) + batch_size - 1) // batch_size
+
+            for batch_num, i in enumerate(range(0, len(unique_keys), batch_size), start=1):
+                batch_keys = unique_keys[i:i + batch_size]
+
+                # D3420からLISTNOを取得
+                indno_list = [k[0] for k in batch_keys]
+                lineno_list = [k[1] for k in batch_keys]
+
+                # D3420クエリ（INDNO IN (...) で一括取得）
+                d3420_query = {
+                    "table": "D3420",
+                    "columns": ["INDNO", "LINENO", "LISTNO"],
+                    "where": {
+                        "and": [
+                            {"INDNO": {"in": indno_list}}
+                        ]
+                    },
+                    "limit": 10000
+                }
+
+                response = client.post(
+                    f"{api_base_url}/query",
+                    headers=headers,
+                    json=d3420_query
+                )
+                response.raise_for_status()
+                d3420_response = response.json()
+
+                # レスポンス形式: {"table": "...", "columns": [...], "rows": [...], "row_count": N}
+                d3420_data = d3420_response.get('rows', [])
+
+                # (INDNO, LINENO) → LISTNO のマッピングを作成
+                listno_map = {}
+                for item in d3420_data:
+                    indno = item.get('INDNO')
+                    lineno = item.get('LINENO')
+                    listno = item.get('LISTNO')
+                    if indno and lineno is not None and listno:
+                        key = (str(indno), int(lineno))
+                        if key in [(str(k[0]), int(k[1])) for k in batch_keys]:
+                            listno_map[key] = listno
+
+                if not listno_map:
+                    logger.debug(f"    バッチ {batch_num}/{total_batches}: D3420からLISTNOが取得できませんでした")
+                    continue
+
+                # ユニークなLISTNOを収集
+                unique_listnos = list(set(listno_map.values()))
+
+                # D3110クエリ（LISTNO IN (...) で一括取得）
+                d3110_query = {
+                    "table": "D3110",
+                    "columns": ["LISTNO", "VERNO", "QTY"],
+                    "where": {
+                        "and": [
+                            {"LISTNO": {"in": unique_listnos}}
+                        ]
+                    },
+                    "limit": 10000
+                }
+
+                response = client.post(
+                    f"{api_base_url}/query",
+                    headers=headers,
+                    json=d3110_query
+                )
+                response.raise_for_status()
+                d3110_response = response.json()
+
+                # レスポンス形式: {"table": "...", "columns": [...], "rows": [...], "row_count": N}
+                d3110_data = d3110_response.get('rows', [])
+
+                # LISTNO → (max VERNO の QTY) マッピングを作成
+                listno_qty_map = {}
+                for item in d3110_data:
+                    listno = item.get('LISTNO')
+                    verno = item.get('VERNO')
+                    qty = item.get('QTY')
+                    if listno and verno is not None:
+                        if listno not in listno_qty_map or verno > listno_qty_map[listno]['verno']:
+                            listno_qty_map[listno] = {'verno': verno, 'qty': qty}
+
+                # QTY=0のキーを除外対象に追加
+                for key, listno in listno_map.items():
+                    if listno in listno_qty_map:
+                        qty_info = listno_qty_map[listno]
+                        if qty_info['qty'] == 0:
+                            exclude_keys.add(key)
+
+                # 10バッチごとに進捗表示
+                if batch_num % 10 == 0:
+                    elapsed = time.time() - overall_start
+                    logger.info(f"    【進捗】{batch_num}/{total_batches}バッチ完了 | 除外対象: {len(exclude_keys)}件 | 経過: {elapsed:.1f}秒")
+
+        overall_elapsed = time.time() - overall_start
+        logger.info(f"    D3420/D3110クエリ完了: {overall_elapsed:.2f}秒")
+
+        # 除外対象の行をフィルタリング
+        if exclude_keys:
+            def should_exclude(row):
+                indno = row.get(indno_col)
+                lineno = row.get(lineno_col)
+                if pd.isna(indno) or pd.isna(lineno):
+                    return False
+                key = (str(indno), int(lineno))
+                return key in exclude_keys
+
+            mask = df.apply(should_exclude, axis=1)
+            df_filtered = df[~mask]
+
+            excluded_count = len(df) - len(df_filtered)
+            logger.info(f"  QTY=0フィルタリング完了: {excluded_count:,}行除外 → {len(df_filtered):,}行")
+
+            # 除外されたキーのサンプルを表示（最初の5件）
+            if excluded_count > 0:
+                sample_keys = list(exclude_keys)[:5]
+                logger.info(f"    除外キーサンプル（最初の{min(5, excluded_count)}件）:")
+                for key in sample_keys:
+                    logger.info(f"      INDNO={key[0]}, LINENO={key[1]}")
+
+            return df_filtered
+        else:
+            logger.info(f"  QTY=0フィルタリング完了: 除外対象なし（{original_rows:,}行維持）")
+            return df
+
+    except httpx.RequestError as e:
+        logger.error(f"  QTY=0フィルタリング API接続エラー: {e}")
+        logger.error(f"  エラー種別: {type(e).__name__}")
+        return df
+    except httpx.HTTPStatusError as e:
+        logger.error(f"  QTY=0フィルタリング APIエラー: {e.response.status_code} - {e.response.text}")
+        return df
+    except Exception as e:
+        logger.error(f"  QTY=0フィルタリング 予期せぬエラー: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return df
+
+
 def deduplicate_with_oyalistno(df, indno_col='伝票No', oyalistno_col='OYALISTNO', qty_col='必要数'):
     """
     2段階重複削除ロジック
@@ -433,6 +631,11 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
         # 高度な重複削除を使用する場合、API呼び出しを先に実行（項目削除前）
         if use_advanced_deduplication:
             logger.info(f"  高度な重複削除モード: API呼び出しを実行")
+
+            # QTY=0フィルタリング（D3420→D3110でQTY=0の行を除外）
+            df = filter_qty_zero_from_api(df, indno_col='伝票No', lineno_col='行番号')
+
+            # OYALISTNO取得
             df = fetch_oyalistno_from_api(df, indno_col='伝票No', lineno_col='行番号')
 
         # 項目削除
