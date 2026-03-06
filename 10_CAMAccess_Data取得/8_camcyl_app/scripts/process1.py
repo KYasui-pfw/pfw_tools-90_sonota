@@ -7,11 +7,37 @@
 - KakouDenpyoディレクトリに出力
 """
 import os
+import re
 import shutil
 import pandas as pd
 import httpx
 from dotenv import load_dotenv
 from logger_config import setup_logger, cleanup_old_logs
+
+# HMCD → SETU_F 変換: -405/-409/-410 + アルファベット + 数字のみサフィックス
+# 変換ルール詳細: HMCD_to_SETU_F_変換ルール.md 参照
+_HMCD_PATTERN = re.compile(r'^(\d[\d-]*-(?:405|409|410)[A-Za-z]+)(\d+)$')
+
+
+def convert_hmcd_to_setu_f(value) -> str:
+    """
+    HMCD を SETU_F 形式に変換する。
+
+    変換対象: -405/-409/-410 + アルファベット + 数字のみのサフィックス（桁数問わず）
+    変換式: int(サフィックス) / 10 → 整数なら整数、余りが出れば小数で表現
+    変換対象外: サフィックスに数字以外の文字が含まれる場合、サフィックスなし
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    m = _HMCD_PATTERN.match(value)
+    if not m:
+        return value
+    alpha, num_str = m.group(1), m.group(2)
+    num_int = int(num_str)
+    if num_int % 10 == 0:
+        return alpha + str(num_int // 10)
+    else:
+        return alpha + str(num_int / 10)
 
 # 環境変数を読み込み
 load_dotenv()
@@ -581,7 +607,7 @@ def copy_simple_file(source_path, output_dir, output_filename=None):
         return False
 
 
-def process_and_copy_file(source_path, output_dir, delete_columns=None, output_filename=None, rename_columns=None, filter_zero_columns=None, reorder_columns=None, use_advanced_deduplication=False):
+def process_and_copy_file(source_path, output_dir, delete_columns=None, output_filename=None, rename_columns=None, filter_zero_columns=None, reorder_columns=None, use_advanced_deduplication=False, convert_kakoububan=False):
     """
     CSVファイルを加工してコピー（項目削除・重複削除・カラム名変更・0行フィルタ・カラム並び替え）
 
@@ -699,6 +725,13 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
         if '払出先' in df.columns:
             df['払出先'] = df['払出先'].apply(convert_to_int)
             logger.info(f"  払出先列をint型に変換（空欄は保持）")
+
+        # 加工部番の HMCD → SETU_F 変換
+        if convert_kakoububan and '加工部番' in df.columns:
+            before = df['加工部番'].copy()
+            df['加工部番'] = df['加工部番'].apply(convert_hmcd_to_setu_f)
+            changed = (before != df['加工部番']).sum()
+            logger.info(f"  加工部番変換（HMCD→SETU_F）: {changed:,}件変換")
 
         # カラムの並び替え
         if reorder_columns:
@@ -825,7 +858,7 @@ def main():
                 logger.info(f"  カラム並び替え: {len(reorder_columns_file2)}列指定")
             logger.info(f"  出力ファイル名: {output_file2}")
             logger.info(f"  高度な重複削除: 有効（API呼び出し + 2段階削除 + 必要数集約）")
-            result = process_and_copy_file(source_path, output_dir, delete_columns_file2, output_file2, rename_columns_file2, None, reorder_columns_file2, use_advanced_deduplication=True)
+            result = process_and_copy_file(source_path, output_dir, delete_columns_file2, output_file2, rename_columns_file2, None, reorder_columns_file2, use_advanced_deduplication=True, convert_kakoububan=True)
         elif filename == 'CONV.csv':
             # CONV.csv - 0行フィルタ（数量・セットアップ・スペアが全て0の行を削除）
             logger.info(f"  0行フィルタ: 数量, セットアップ, スペアが全て0の行を削除")
