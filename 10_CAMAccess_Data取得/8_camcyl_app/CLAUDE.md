@@ -172,6 +172,14 @@ Every 15 minutes → run_all.sh
 - Date-stamped log files (`process1_YYYYMMDD.log`)
 - Automatic cleanup of old logs
 
+## Process仕様書
+
+各Processの詳細仕様は以下のMarkdownファイルを参照:
+- `process1_仕様書.md`: CSV加工処理（高度な重複削除、カラム並び替え）
+- `process2_仕様書.md`: Access DB抽出（UCanAccess JDBC、LEFT JOIN）
+- `process3_仕様書.md`: EJ完了実績送信（日付フィルタ、状態チェック）
+- `process4_仕様書.md`: シリンダ/ダイアル完了実績送信（CAT2マッピング、OYALISTNO検索）
+
 ## Environment Configuration
 
 **Required Setup** (Linux server only):

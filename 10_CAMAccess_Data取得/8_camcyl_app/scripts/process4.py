@@ -573,6 +573,11 @@ async def process_csv_data(df, api_base_url, read_api_key, insert_api_key, lot_m
                     logger.warning(f"  [{row_number}/{total_rows}] 日付変換エラー ({date_col}): {e}")
                     continue
 
+                # 2026-05-31以前の日付は2026-06-01に置換
+                if kteddt <= '2026-05-31':
+                    logger.debug(f"  [{row_number}/{total_rows}] 日付置換: {kteddt} → 2026-06-01 ({date_col})")
+                    kteddt = '2026-06-01'
+
                 # 工程・品名マッピング取得
                 if date_col not in process_mapping:
                     continue
