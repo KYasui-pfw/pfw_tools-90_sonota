@@ -24,11 +24,11 @@ wait $PID2
 EXIT_CODE2=$?
 
 # 処理3: CSV → FastAPI completion エンドポイント送信（EJデータ）
-python "$SCRIPT_DIR/process3.py"
+## python "$SCRIPT_DIR/process3.py"
 EXIT_CODE3=$?
 
 # 処理4: CSV → FastAPI completion エンドポイント送信（シリンダ・ダイアルデータ）
-python "$SCRIPT_DIR/process4.py"
+## python "$SCRIPT_DIR/process4.py"
 EXIT_CODE4=$?
 
 # いずれかの処理が失敗した場合はエラーコードを返す

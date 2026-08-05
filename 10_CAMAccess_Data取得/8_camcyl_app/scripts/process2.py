@@ -171,6 +171,12 @@ def main():
             'table_name': table2_name,
             'output_prefix': output_prefix2,
             'job_table_name': None  # CAMFIN_LOG_ALLはJOINなし
+        },
+        {
+            'source': accdb_source2,
+            'table_name': 'CAMPUT',
+            'output_prefix': output_prefix2,
+            'job_table_name': None  # CAMPUTはJOINなし
         }
     ]
 

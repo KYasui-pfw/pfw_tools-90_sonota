@@ -16,14 +16,14 @@ from logger_config import setup_logger, cleanup_old_logs
 
 # HMCD → SETU_F 変換: -405/-409/-410 + アルファベット + 数字のみサフィックス
 # 変換ルール詳細: HMCD_to_SETU_F_変換ルール.md 参照
-_HMCD_PATTERN = re.compile(r'^(\d[\d-]*-(?:405|409|410)[A-Za-z]+)(\d+)$')
+_HMCD_PATTERN = re.compile(r'^(\d[\d-]*-(?:405|409|410)[A-Za-z]*)(\d+)$')
 
 
 def convert_hmcd_to_setu_f(value) -> str:
     """
     HMCD を SETU_F 形式に変換する。
 
-    変換対象: -405/-409/-410 + アルファベット + 数字のみのサフィックス（桁数問わず）
+    変換対象: -405/-409/-410 + アルファベット(0文字以上) + 数字のみのサフィックス（桁数問わず）
     変換式: int(サフィックス) / 10 → 整数なら整数、余りが出れば小数で表現
     変換対象外: サフィックスに数字以外の文字が含まれる場合、サフィックスなし
     """
@@ -33,6 +33,9 @@ def convert_hmcd_to_setu_f(value) -> str:
     if not m:
         return value
     alpha, num_str = m.group(1), m.group(2)
+    # アルファベットなしパターン（-405/-409/-410 直後が数字）はサフィックスを3桁に限定
+    if alpha[-1].isdigit() and len(num_str) != 3:
+        return value
     num_int = int(num_str)
     if num_int % 10 == 0:
         return alpha + str(num_int // 10)
@@ -470,6 +473,99 @@ def filter_qty_zero_from_api(df, indno_col='伝票No', lineno_col='行番号'):
         return df
 
 
+def fill_kumitate_kaishi_from_d3010(df, seino_col='製番', kumitate_col='組立開始日', seisan_col='生産月次'):
+    """
+    生産月次の末尾が"0"の行について、D3010.DEADLINEで組立開始日を上書き
+    """
+    api_base_url = os.getenv('FASTAPI_BASE_URL', 'http://fastapi-rbom-app:8000')
+    read_api_key = os.getenv('READ_API_KEY', '')
+
+    if not read_api_key:
+        logger.error("READ_API_KEY が設定されていません（D3010上書きをスキップ）")
+        return df
+
+    missing = [c for c in [seisan_col, seino_col, kumitate_col] if c not in df.columns]
+    if missing:
+        logger.warning(f"  D3010上書き: スキップ（カラムが見つかりません: {', '.join(missing)}）")
+        return df
+
+    def is_last_char_zero(val):
+        if pd.isna(val) or str(val).strip() == '':
+            return False
+        return str(val)[-1] in ('0', '9', '_')
+
+    target_mask = df[seisan_col].apply(is_last_char_zero)
+    target_count = target_mask.sum()
+
+    if target_count == 0:
+        logger.info(f"  D3010上書き: 対象行なし（生産月次末尾=0の行が0件）")
+        return df
+
+    logger.info(f"  D3010上書き開始: 生産月次末尾=0の行 {target_count:,}件")
+
+    unique_seinoes = [str(s) for s in df.loc[target_mask, seino_col].dropna().unique() if str(s).strip()]
+    logger.info(f"  対象製番: {len(unique_seinoes)}件")
+
+    if not unique_seinoes:
+        logger.warning(f"  D3010上書き: 製番が取得できませんでした")
+        return df
+
+    headers = {"X-API-KEY": read_api_key, "Content-Type": "application/json"}
+    deadline_map = {}
+
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            batch_size = 100
+            for i in range(0, len(unique_seinoes), batch_size):
+                batch = unique_seinoes[i:i + batch_size]
+                query = {
+                    "table": "D3010",
+                    "columns": ["SEINO", "DEADLINE"],
+                    "where": {"SEINO": {"in": batch}},
+                    "limit": 10000
+                }
+                response = client.post(f"{api_base_url}/query", headers=headers, json=query)
+                response.raise_for_status()
+                for item in response.json().get('rows', []):
+                    seino = item.get('SEINO')
+                    deadline = item.get('DEADLINE')
+                    if seino and deadline is not None:
+                        try:
+                            import datetime
+                            if isinstance(deadline, str):
+                                dt = pd.to_datetime(deadline)
+                            else:
+                                dt = pd.Timestamp(deadline)
+                            deadline_map[str(seino)] = dt.strftime('%Y/%m/%d')
+                        except Exception:
+                            deadline_map[str(seino)] = str(deadline)
+
+        logger.info(f"  D3010取得: {len(deadline_map)}件のDEADLINEを取得")
+
+        updated = 0
+        not_found = 0
+        for idx in df.index[target_mask]:
+            seino = str(df.at[idx, seino_col]) if pd.notna(df.at[idx, seino_col]) else None
+            if seino and seino in deadline_map:
+                df.at[idx, kumitate_col] = deadline_map[seino]
+                updated += 1
+            else:
+                not_found += 1
+
+        logger.info(f"  D3010上書き完了: 更新={updated:,}件, D3010未取得={not_found:,}件")
+
+    except httpx.RequestError as e:
+        logger.error(f"  D3010上書き API接続エラー: {e}")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"  D3010上書き APIエラー: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        logger.error(f"  D3010上書き 予期せぬエラー: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+    return df
+
+
 def deduplicate_with_oyalistno(df, indno_col='伝票No', oyalistno_col='OYALISTNO', qty_col='必要数'):
     """
     2段階重複削除ロジック
@@ -486,6 +582,13 @@ def deduplicate_with_oyalistno(df, indno_col='伝票No', oyalistno_col='OYALISTN
     Returns:
         pd.DataFrame: 重複削除後のDataFrame
     """
+    # 空のDataFrameはそのまま返す（OYALISTNOカラムのみ削除）
+    if df.empty:
+        if oyalistno_col in df.columns:
+            df = df.drop(columns=[oyalistno_col])
+        logger.info(f"  重複削除: 入力が0行のためスキップ")
+        return df
+
     original_rows = len(df)
 
     # 1段階目: INDNO → OYALISTNO でグループ化し、各グループの1行目のみを保持
@@ -550,6 +653,51 @@ def deduplicate_with_oyalistno(df, indno_col='伝票No', oyalistno_col='OYALISTN
     return df_final
 
 
+def duplicate_mckr_rows(df, mckr_target_keys=None):
+    """
+    特定5部品かつ工程コード=MCKRの行を複製し、
+    複製行の払出先を60に変更して元行の直下に挿入する。
+    工程コードは列削除後に消えるため、呼び出し元で事前記録した伝票Noセットを受け取る。
+    asp_kakou_mapping.py の時限処理（払出先40除外・60通過）と連携。
+    """
+    haraidashi_col = '払出先'
+    indno_col = '伝票No'
+
+    missing = [c for c in [haraidashi_col, indno_col] if c not in df.columns]
+    if missing:
+        logger.warning(f"  MCKR複製: スキップ（カラムが見つかりません: {', '.join(missing)}）")
+        return df
+
+    if not mckr_target_keys:
+        logger.info(f"  MCKR複製: 対象行なし（事前記録なし）")
+        return df
+
+    mask_target = df[indno_col].astype(str).isin(mckr_target_keys)
+    target_count = int(mask_target.sum())
+
+    if target_count == 0:
+        logger.info(f"  MCKR複製: 対象行なし（{len(mckr_target_keys)}件記録済みだがマッチせず）")
+        return df
+
+    logger.info(f"  MCKR複製: 対象行 {target_count}件 → 払出先60の複製行を直下に挿入")
+
+    df = df.reset_index(drop=True)
+    result_dfs = []
+    prev_idx = 0
+    for idx in df.index[mask_target]:
+        result_dfs.append(df.iloc[prev_idx:idx + 1])
+        copy_row = df.iloc[idx:idx + 1].copy()
+        copy_row[haraidashi_col] = 60
+        result_dfs.append(copy_row)
+        prev_idx = idx + 1
+    if prev_idx < len(df):
+        result_dfs.append(df.iloc[prev_idx:])
+
+    df_result = pd.concat(result_dfs).reset_index(drop=True)
+    logger.info(f"  MCKR複製完了: {len(df)}行 → {len(df_result)}行")
+    return df_result
+
+
 def read_csv_files():
     """環境変数からCSVファイルパスを読み込む"""
     csv_files = {
@@ -607,7 +755,7 @@ def copy_simple_file(source_path, output_dir, output_filename=None):
         return False
 
 
-def process_and_copy_file(source_path, output_dir, delete_columns=None, output_filename=None, rename_columns=None, filter_zero_columns=None, reorder_columns=None, use_advanced_deduplication=False, convert_kakoububan=False):
+def process_and_copy_file(source_path, output_dir, delete_columns=None, output_filename=None, rename_columns=None, filter_zero_columns=None, reorder_columns=None, use_advanced_deduplication=False, convert_kakoububan=False, fill_kumitate_kaishi=False):
     """
     CSVファイルを加工してコピー（項目削除・重複削除・カラム名変更・0行フィルタ・カラム並び替え）
 
@@ -664,6 +812,20 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
             # OYALISTNO取得
             df = fetch_oyalistno_from_api(df, indno_col='伝票No', lineno_col='行番号')
 
+            # MCKRターゲット行の事前記録（工程コードは次の列削除ステップで消えるため）
+            _SPECIAL_BUHINMEI = ['SINKER REST RING', 'NEEDLE DIAL', 'NEEDLE CYLINDER', 'SINKER DIAL', 'WRAP DIAL']
+            mckr_target_keys = set()
+            if '工程コード' in df.columns and '部品名' in df.columns and '伝票No' in df.columns:
+                _mask_mckr = (
+                    df['部品名'].fillna('').astype(str).str.strip().isin(_SPECIAL_BUHINMEI) &
+                    (df['工程コード'].fillna('').astype(str).str.strip() == 'MCKR')
+                )
+                mckr_target_keys = set(df.loc[_mask_mckr, '伝票No'].astype(str))
+                logger.info(f"  MCKR事前記録: {len(mckr_target_keys)}件（列削除前に記録）")
+            else:
+                _missing = [c for c in ['工程コード', '部品名', '伝票No'] if c not in df.columns]
+                logger.warning(f"  MCKR事前記録: スキップ（カラムが見つかりません: {', '.join(_missing)}）")
+
         # 項目削除
         if delete_columns:
             existing_columns = [col for col in delete_columns if col in df.columns]
@@ -684,6 +846,8 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
         if use_advanced_deduplication:
             # 2段階重複削除（INDNO → OYALISTNO、必要数の集約）
             df = deduplicate_with_oyalistno(df, indno_col='伝票No', oyalistno_col='OYALISTNO', qty_col='必要数')
+            # 特定5部品のMCKR行を払出先60で複製して直下に挿入
+            df = duplicate_mckr_rows(df, mckr_target_keys=mckr_target_keys)
         else:
             # 通常の重複削除（全カラムで判定）
             df_deduplicated = df.drop_duplicates()
@@ -725,6 +889,10 @@ def process_and_copy_file(source_path, output_dir, delete_columns=None, output_f
         if '払出先' in df.columns:
             df['払出先'] = df['払出先'].apply(convert_to_int)
             logger.info(f"  払出先列をint型に変換（空欄は保持）")
+
+        # D3010 DEADLINE 上書き（生産月次末尾=0の行の組立開始日を上書き）
+        if fill_kumitate_kaishi:
+            df = fill_kumitate_kaishi_from_d3010(df)
 
         # 加工部番の HMCD → SETU_F 変換
         if convert_kakoububan and '加工部番' in df.columns:
@@ -858,7 +1026,7 @@ def main():
                 logger.info(f"  カラム並び替え: {len(reorder_columns_file2)}列指定")
             logger.info(f"  出力ファイル名: {output_file2}")
             logger.info(f"  高度な重複削除: 有効（API呼び出し + 2段階削除 + 必要数集約）")
-            result = process_and_copy_file(source_path, output_dir, delete_columns_file2, output_file2, rename_columns_file2, None, reorder_columns_file2, use_advanced_deduplication=True, convert_kakoububan=True)
+            result = process_and_copy_file(source_path, output_dir, delete_columns_file2, output_file2, rename_columns_file2, None, reorder_columns_file2, use_advanced_deduplication=True, convert_kakoububan=True, fill_kumitate_kaishi=True)
         elif filename == 'CONV.csv':
             # CONV.csv - 0行フィルタ（数量・セットアップ・スペアが全て0の行を削除）
             logger.info(f"  0行フィルタ: 数量, セットアップ, スペアが全て0の行を削除")
