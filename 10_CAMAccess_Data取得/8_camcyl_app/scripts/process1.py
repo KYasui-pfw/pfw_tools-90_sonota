@@ -1010,15 +1010,16 @@ def main():
         logger.info(f"[{success_count + error_count + 1}/{len(csv_files)}] 処理中: {filename}")
 
         # 加工対象ファイルかどうか判定
-        if filename == process_file1:
-            # CAMKakouDenpyou.csv - 項目削除・重複削除・カラム名変更・カラム並び替え
-            if delete_columns_file1:
-                logger.info(f"  削除対象カラム: {', '.join(delete_columns_file1)}")
-            if reorder_columns_file1:
-                logger.info(f"  カラム並び替え: {len(reorder_columns_file1)}列指定")
-            logger.info(f"  出力ファイル名: {output_file1}")
-            result = process_and_copy_file(source_path, output_dir, delete_columns_file1, output_file1, rename_columns_file1, None, reorder_columns_file1)
-        elif filename == process_file2:
+        # ASPKakouDenpyoのみ作成する運用に変更したため、CAMKakouDenpyo/CONV/SEISANKIの作成処理は一時停止（コメントアウト）
+        # if filename == process_file1:
+        #     # CAMKakouDenpyou.csv - 項目削除・重複削除・カラム名変更・カラム並び替え
+        #     if delete_columns_file1:
+        #         logger.info(f"  削除対象カラム: {', '.join(delete_columns_file1)}")
+        #     if reorder_columns_file1:
+        #         logger.info(f"  カラム並び替え: {len(reorder_columns_file1)}列指定")
+        #     logger.info(f"  出力ファイル名: {output_file1}")
+        #     result = process_and_copy_file(source_path, output_dir, delete_columns_file1, output_file1, rename_columns_file1, None, reorder_columns_file1)
+        if filename == process_file2:
             # ASPKakouDenpyo.csv - 項目削除・高度な重複削除・カラム名変更・カラム並び替え
             if delete_columns_file2:
                 logger.info(f"  削除対象カラム: {', '.join(delete_columns_file2)}")
@@ -1027,14 +1028,18 @@ def main():
             logger.info(f"  出力ファイル名: {output_file2}")
             logger.info(f"  高度な重複削除: 有効（API呼び出し + 2段階削除 + 必要数集約）")
             result = process_and_copy_file(source_path, output_dir, delete_columns_file2, output_file2, rename_columns_file2, None, reorder_columns_file2, use_advanced_deduplication=True, convert_kakoububan=True, fill_kumitate_kaishi=True)
-        elif filename == 'CONV.csv':
-            # CONV.csv - 0行フィルタ（数量・セットアップ・スペアが全て0の行を削除）
-            logger.info(f"  0行フィルタ: 数量, セットアップ, スペアが全て0の行を削除")
-            result = process_and_copy_file(source_path, output_dir, filter_zero_columns=['数量', 'セットアップ', 'スペア'])
-        elif filename == 'SEISANKI.csv':
-            # SEISANKI.csv - 0行フィルタ（数量・セットアップ・スペアが全て0の行を削除）
-            logger.info(f"  0行フィルタ: 数量, セットアップ, スペアが全て0の行を削除")
-            result = process_and_copy_file(source_path, output_dir, filter_zero_columns=['数量', 'セットアップ', 'スペア'])
+        # elif filename == 'CONV.csv':
+        #     # CONV.csv - 0行フィルタ（数量・セットアップ・スペアが全て0の行を削除）
+        #     logger.info(f"  0行フィルタ: 数量, セットアップ, スペアが全て0の行を削除")
+        #     result = process_and_copy_file(source_path, output_dir, filter_zero_columns=['数量', 'セットアップ', 'スペア'])
+        # elif filename == 'SEISANKI.csv':
+        #     # SEISANKI.csv - 0行フィルタ（数量・セットアップ・スペアが全て0の行を削除）
+        #     logger.info(f"  0行フィルタ: 数量, セットアップ, スペアが全て0の行を削除")
+        #     result = process_and_copy_file(source_path, output_dir, filter_zero_columns=['数量', 'セットアップ', 'スペア'])
+        elif filename == process_file1 or filename in ('CONV.csv', 'SEISANKI.csv'):
+            # 作成処理を一時停止中（上記コメントアウト部分を参照）。出力ファイルは作成しない
+            logger.info(f"  スキップ（作成処理を一時停止中）: {filename}")
+            result = True
         else:
             # その他のファイル - そのままコピー
             result = copy_simple_file(source_path, output_dir)
