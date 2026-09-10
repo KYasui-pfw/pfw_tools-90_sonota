@@ -1,0 +1,19 @@
+# パスワードを含むためコミットしない（esrv11 側にのみ置く）
+.env
+
+# esrv11 側で生成される実行時の状態（手元には本来存在しない）
+logs/
+oradata/
+dmp/
+.last_dmp_sig
+
+# データ本体
+*.DMP
+*.dmp
+*.tar.gz
+*.gz
+*.zip
+*.log
+
+# パスワードの手控え（共有しない）
+passmemo.txt

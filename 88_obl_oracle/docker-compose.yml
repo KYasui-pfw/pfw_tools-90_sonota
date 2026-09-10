@@ -1,0 +1,65 @@
+services:
+  oracle-free:
+    # Oracle AI Database 26ai Free 23.26.3.0.0（2026-09-09 時点の latest）
+    # ⚠ このリポジトリは latest タグしか公開しておらず、バージョンタグが無い。
+    #    2年運用するあいだに latest が別バージョンへ動くと、コンテナを作り直したときに
+    #    別のDBになってしまうため、ダイジェストで固定する。
+    #    意図してバージョンを上げるときだけ、下の1行を新しいダイジェストに差し替える。
+    #    （元のタグ: container-registry.oracle.com/database/free:latest）
+    image: container-registry.oracle.com/database/free@sha256:f988b0c04c4c386cd306a2a914c0d7a9702d83acc31b064a28ad8eb6278a8fba
+    container_name: obl-oracle
+    # ★esrv11 は root の crontab（0 1 * * * /sbin/reboot）で毎日 1:00 に再起動する。
+    #   "no" にすると毎朝1時以降DBが落ちたままになるため unless-stopped が必須。
+    # ⚠ ただし「まだDBを作っていない状態」でこれを付けると、2026-09-09 の事故のように
+    #   ホストが不安定なときに再起動のたびにDB作成をやり直して負荷をかけ続ける。
+    #   oradata が空の状態から作り直すときは、一時的に "no" にしてから作業すること。
+    restart: unless-stopped
+
+    # ★必須。既定の 64MB では SGA を /dev/shm に確保できず起動に失敗する
+    shm_size: 2g
+    mem_limit: 4g
+    cpus: "2"
+
+    # ⚠ 2026-09-09 の事故対策：書き込み帯域を絞る。
+    #    DB作成(DBCA)とimpdpは数GBを一気に書くため、Hyper-Vホストのストレージを
+    #    圧迫して他の業務コンテナごと巻き添えにした。50MB/s あれば所要時間はほぼ変わらない。
+    #    dm-0 = /dev/mapper/ubuntu--vg-ubuntu--lv（ルートFS）、sda = その下の物理デバイス。
+    #    LVM を挟んでいるため両方に指定する。読み込みは絞らない（impdp が遅くなるため）。
+    blkio_config:
+      device_write_bps:
+        - path: /dev/dm-0
+          rate: '50mb'
+        - path: /dev/sda
+          rate: '50mb'
+
+    environment:
+      # SYS / SYSTEM / PDBADMIN の共通パスワード
+      ORACLE_PWD: ${ORACLE_PWD}
+      # ★ローカル 21c XE と同じ。初回のDB作成時のみ有効（後から変更不可）
+      ORACLE_CHARACTERSET: AL32UTF8
+      # ★true にすると FRA が満杯になり DB が停止する（ORA-00257）。一時DBなので OFF
+      ENABLE_ARCHIVELOG: "false"
+      TZ: Asia/Tokyo
+
+    ports:
+      # C:\Dev の Python（python-oracledb thin）から esrv11:1521/FREEPDB1 で接続する
+      - "1521:1521"
+
+    volumes:
+      - ./oradata:/opt/oracle/oradata
+      - ./dmp:/opt/oracle/dmp
+      # setup 配下は「DB作成直後に1回だけ」実行される
+      - ./setup:/opt/oracle/scripts/setup:ro
+
+    networks:
+      - app-shared-net
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  app-shared-net:
+    external: true
