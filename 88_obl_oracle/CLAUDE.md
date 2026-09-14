@@ -33,7 +33,9 @@ import oracledb   # thin モードなので Instant Client 不要
 conn = oracledb.connect(user="obl", password="obl", dsn="esrv11:1521/FREEPDB1")
 ```
 
-⚠ **毎日 23:30 から約9分は接続できない**（後述のリフレッシュ中）。
+⚠ **毎日 12:40 から約9分は接続できない**（後述のリフレッシュ中）。
+**業務時間内に止まる**ので、この時間帯に参照すると「テーブルが無い」エラーになる
+（`DROP USER` 済みで `impdp` の途中のため）。
 
 ## コマンド
 
@@ -56,7 +58,7 @@ ls -lt /mnt/fsrv24/obl_dmp/     # fsrv24 に来ているダンプ
 `deploy.py` の転送対象は `SYNC_FILES` に列挙した3ファイルのみ（`docker-compose.yml` / `refresh.sh` / `setup/01_init.sql`）。
 ファイルを増やしたらここに追記する。`.env` `oradata/` `dmp/` `logs/` は**意図的に対象外**。
 
-## 日次処理（cron: 毎日 23:30）
+## 日次処理（cron: 毎日 12:40）
 
 ```
 fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウント）
@@ -135,9 +137,12 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 ├── docker-compose.yml / refresh.sh / setup/   ← deploy.py で同期
 ├── .env            パスワードと DMP_DIR / DMP_PATTERN。★同期対象外・Git対象外
 ├── .last_dmp_sig   前回取り込んだダンプの識別子
-├── oradata/        DB本体（約4GB。コンテナの /opt/oracle/oradata）
-├── dmp/            展開先（3GB）＋ impdp ログ、archive/ に前回分（3GB）
+├── oradata/        DB本体（実測 約11GB。うち FREEPDB1 7.1GB＝obl_data01.dbf 5.6GB。コンテナの /opt/oracle/oradata）
+├── dmp/            展開先（約3GB）＋ impdp ログ。取込後に archive/ へ移すので平常時は 2.8GB、取込中だけ倍になる
 └── logs/           refresh_<日時>.log
+
+/home/docker-user/output/obbligate_copy/     ← 図面一覧CSVの出力先（docker-apps の外）
+└── obbligate_all_zumen.csv   約24MB / 242,220行。\\esrv11\output\obbligate_copy\ で参照
 ```
 
 - `dmp/` はコンテナの `/opt/oracle/dmp` にマウントされ、Oracle の `DMPDIR` がそこを指す。
@@ -156,7 +161,7 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 | `入力ディレクトリが見つからない` | CIFS マウント切れ。`sudo mount -a` で復旧 |
 | `アーカイブ内に .DMP が無い` | fsrv24 へのコピーが未完了。次のサイクルを待つ（DBは無傷） |
 | DBに繋がらない | `docker ps --filter name=obl-oracle`。落ちていれば `docker compose up -d` |
-| 12GB上限に近づいた | `SELECT ROUND(SUM(bytes)/1024/1024/1024,2) FROM user_segments;`（現在4.82GB） |
+| 12GB上限に近づいた | OBL で接続して `SELECT ROUND(SUM(bytes)/1024/1024/1024,2) FROM user_segments;`（SYSTEM なら `FROM dba_segments WHERE owner='OBL'`。refresh.sh はこちら）。現在4.82GB |
 
 ## 詳細ドキュメント
 

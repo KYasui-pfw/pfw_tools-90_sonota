@@ -14,7 +14,7 @@ C:\\Dev\\90_tools\\88_obl_oracle  →  esrv11:/home/docker-user/docker-apps/12_o
 
 同期しないもの（esrv11 側にしか存在しない。転送すると壊れる）:
     .env          パスワード。Git にも載せない
-    oradata/      DB本体（約9GB）
+    oradata/      DB本体（約11GB）
     dmp/          ダンプの展開先（約3GB）
     logs/         実行ログ
     .last_dmp_sig 前回取り込んだ dmp の識別子
