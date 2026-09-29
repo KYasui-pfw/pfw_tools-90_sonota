@@ -36,6 +36,10 @@ conn = oracledb.connect(user="obl", password="obl", dsn="esrv11:1521/FREEPDB1")
 ⚠ **毎日 12:40 から約9分は接続できない**（後述のリフレッシュ中）。
 **業務時間内に止まる**ので、この時間帯に参照すると「テーブルが無い」エラーになる
 （`DROP USER` 済みで `impdp` の途中のため）。
+⚠ **リフレッシュ開始時に OBL で接続中のセッションは強制切断される。**
+接続が残っていると `DROP USER` が ORA-01940 で失敗するため（2026-09-29 に発生）、
+`refresh.sh` の 4) で OBL をロック → 残ったセッションを `KILL SESSION` → DROP（最大60秒やり直し）
+の順にしている。消せなかったときはロックを戻して異常終了する（DB は無傷）。
 
 ## コマンド
 
@@ -70,6 +74,7 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
     ↓ DBMS_STATS.GATHER_SCHEMA_STATS
     ↓ 件数検証（0件なら異常終了）
     ↓ 図面一覧を出力（output/obbligate_copy/obbligate_all_zumen.csv・約4秒）
+    ↓ 前回との差分を diff/obbligate_zumen_diff_<日付>.csv に出力（30日保持）
   logs/refresh_<日時>.log に記録（60日で自動削除）
 ```
 
@@ -85,7 +90,8 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 
 | 列 | 内容 |
 |---|---|
-| PART_NUMBER / PART_NAME | 品番・品名（`part` / `part_version`） |
+| PART_NUMBER / PART_NAME | 品番・品名（`part.part_number` / `part.name`） |
+| PART_VERSION_NAME | 版の品名（`part_version.name`。Approved の最新版）。PART_NAME とは別に並べて出す |
 | DOCUMENT_NUMBER / VER / REV | 図番・版数・改訂 |
 | LIFECYCLE | `document_version.lifecycle_state_name` |
 | FILE_BASE | **図番 + REVISION 2桁**（`VERSION` ではない。拡張子なし） |
@@ -94,7 +100,7 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 - **抽出条件は `90_temp/99_tmp/08_obli/09_export_copy_target.py` と同じ**
   （CADネイティブが `mi` / `tif`。ライフサイクルでは絞らず InWork も含める）。
   条件を変えるときは両方を見比べること
-- ⚠ **8列に絞っても行は重複しない**ため `DISTINCT` は付けていない（実測で 242,220 = 242,220）。
+- ⚠ **列を絞っても行は重複しない**ため `DISTINCT` は付けていない（実測で 242,220 = 242,220）。
   FILE_BASE 自体は 81,292 種類で、同じ図面が複数の品番から参照されるぶん行が増える
 - **UTF-8 BOM 付き・CRLF**（Excel でそのまま開ける。Python は `encoding="utf-8-sig"`）
 - ⚠ **`sq()` の `NLS_LANG=Japanese_Japan.AL32UTF8` を外さないこと。**
@@ -105,6 +111,27 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 - **更新が無くてスキップした日は CSV も作り直さない**（前日のものがそのまま残る）
 - ここで失敗しても取り込み自体は完了している（`.last_dmp_sig` は 8) で更新済み）。
   翌日まるごとやり直しにはならず、`./refresh.sh --force` で作り直せる
+
+### 前回との差分（diff/obbligate_zumen_diff_<日付>.csv）
+
+同じ `refresh.sh` の 10) で、上の一覧を**前回分とまるごと比較**した差分を
+**`\\esrv11\output\obbligate_copy\diff\obbligate_zumen_diff_YYYYMMDD.csv`** へ出す。
+
+- 一覧の9列を**1行として**比べ、先頭に `DIFF_TYPE` 列（`追加` / `削除`）を足した10列で出力する。
+  キーを置かないので、**REV や更新日が変わった図面は「削除」＋「追加」の2行**で現れる
+- **差分が無い日もヘッダー行だけの CSV を必ず作る**（0行＝比較はした、の意）
+- 比較用の前回分は **`.obbligate_all_zumen.prev.csv`**（ヘッダー・BOM 無しの生データ）として
+  同じフォルダに**1世代だけ**持つ。差分 CSV は **30日で自動削除**（`-mtime +30`）
+- ⚠ **前回分の列構成は `.obbligate_all_zumen.prev.csv.header` に控える。**列を増減した直後は
+  全行が「削除＋追加」になって巨大な差分になるため、構成が違う（または控えが無い）ときは差分0行にする。
+  ヘッダーは `refresh.sh` の `ZUMEN_HEADER` 1か所で定義し、一覧・差分・控えのすべてがこれを使う
+- ⚠ **24MBのフル一覧を日ごとに残さない。** 30日分で700MBを超えるため、1か月残すのは差分だけ
+  （esrv11 はホストの容量が枯渇した事故があるので増やさないこと）
+- ⚠ **初回（`.prev.csv` が無い）は差分0行**。全件を「追加」として出すと 24MB になるため出さない。
+  比較は次回から始まる
+- ⚠ **並べ替えは `LC_ALL=C`。** `comm` は「同じ並び順で整列済み」が前提なので、
+  ロケールで並びが変わると差分が壊れる
+- 更新が無くてスキップした日は差分も作られない（＝その日付のファイルができない）
 
 ## 触るときの注意
 
@@ -142,7 +169,9 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 └── logs/           refresh_<日時>.log
 
 /home/docker-user/output/obbligate_copy/     ← 図面一覧CSVの出力先（docker-apps の外）
-└── obbligate_all_zumen.csv   約24MB / 242,220行。\\esrv11\output\obbligate_copy\ で参照
+├── obbligate_all_zumen.csv         約24MB / 242,220行。\\esrv11\output\obbligate_copy\ で参照
+├── .obbligate_all_zumen.prev.csv   差分比較用の前回分（ヘッダー・BOM無し）。1世代のみ
+└── diff/                           前回との差分 obbligate_zumen_diff_<日付>.csv。30日で自動削除
 ```
 
 - `dmp/` はコンテナの `/opt/oracle/dmp` にマウントされ、Oracle の `DMPDIR` がそこを指す。

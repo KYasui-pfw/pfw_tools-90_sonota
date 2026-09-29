@@ -109,13 +109,43 @@ echo "-- 取込前の ASSEMBLY_COMPONENT: $BEFORE"
 
 # ------------------------------------------------------------
 # 4) 破棄 → 作り直し（データファイルごと消してディスクを解放）
+#    ⚠ OBL で接続中の人が1人でもいると DROP USER が ORA-01940 で失敗する
+#      （2026-09-29 に発生）。業務時間内に走るので、先にアカウントをロックして
+#      新しい接続を止め、残っているセッションを切断してから DROP する。
+#      切断直後はセッションが KILLED のまま残ることがあるので、最大60秒やり直す。
+#      それでも消せなければロックを戻してから異常終了する（DB は無傷のまま）。
+#    ★ヒアドキュメントは変数展開ありなので v\$session の $ はエスケープする
 # ------------------------------------------------------------
 echo "-- 旧スキーマを破棄して作り直し..."
 sq <<SQL
 WHENEVER SQLERROR EXIT 1
+SET SERVEROUTPUT ON
 BEGIN
-  BEGIN EXECUTE IMMEDIATE 'DROP USER OBL CASCADE';
+  BEGIN EXECUTE IMMEDIATE 'ALTER USER OBL ACCOUNT LOCK';
   EXCEPTION WHEN OTHERS THEN IF SQLCODE != -1918 THEN RAISE; END IF; END;
+  FOR i IN 1 .. 30 LOOP
+    FOR s IN (SELECT sid, serial#, osuser, machine, program
+                FROM v\$session WHERE username = 'OBL' AND status <> 'KILLED') LOOP
+      DBMS_OUTPUT.PUT_LINE('-- 接続中のセッションを切断: ' || s.osuser || ' / ' ||
+                           s.machine || ' / ' || s.program);
+      BEGIN
+        EXECUTE IMMEDIATE 'ALTER SYSTEM KILL SESSION ''' || s.sid || ',' || s.serial# || ''' IMMEDIATE';
+      EXCEPTION WHEN OTHERS THEN NULL;   -- 切断の間に自分で抜けた場合など
+      END;
+    END LOOP;
+    BEGIN
+      EXECUTE IMMEDIATE 'DROP USER OBL CASCADE';
+      EXIT;
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLCODE = -1918 THEN EXIT; END IF;          -- 元々いない
+      IF SQLCODE != -1940 OR i = 30 THEN
+        BEGIN EXECUTE IMMEDIATE 'ALTER USER OBL ACCOUNT UNLOCK';
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        RAISE;
+      END IF;
+      DBMS_SESSION.SLEEP(2);
+    END;
+  END LOOP;
   BEGIN EXECUTE IMMEDIATE 'DROP TABLESPACE obl_data INCLUDING CONTENTS AND DATAFILES';
   EXCEPTION WHEN OTHERS THEN IF SQLCODE != -959 THEN RAISE; END IF; END;
 END;
@@ -212,7 +242,9 @@ find dmp  -name 'impdp_*.log'   -mtime +60 -delete 2>/dev/null   # impdp のロ�
 #      - ライフサイクルでは絞らない（InWork も含める）。いまは Approved に
 #        なっている図面を落とさないため
 #      - FILE_BASE は 図番 + REVISION 2桁。VERSION ではない
-#      - 8列に絞っても行は重複しないので DISTINCT は付けない（実測で同数）
+#      - 品名は PART.NAME（PART_NAME）と PART_VERSION.NAME（PART_VERSION_NAME）を
+#        どちらかに寄せず並べて出す
+#      - 列を絞っても行は重複しないので DISTINCT は付けない（実測で同数）
 #
 #    ⚠ 取り込みが終わってから出す。ここで落ちても DB は最新化済みで
 #      .last_dmp_sig も 8) で更新してあるため、翌日まるごとやり直しにはならない。
@@ -220,6 +252,7 @@ find dmp  -name 'impdp_*.log'   -mtime +60 -delete 2>/dev/null   # impdp のロ�
 ZUMEN_OUT_DIR="${ZUMEN_OUT_DIR:-/home/docker-user/output/obbligate_copy}"
 ZUMEN_CSV="$ZUMEN_OUT_DIR/obbligate_all_zumen.csv"
 ZUMEN_RAW="dmp/obbligate_all_zumen.raw"
+ZUMEN_HEADER='"PART_NUMBER","PART_NAME","PART_VERSION_NAME","DOCUMENT_NUMBER","VER","REV","LIFECYCLE","FILE_BASE","FILE_MODIFIED_ON"'
 
 echo "-- 図面一覧を出力中: $ZUMEN_CSV"
 mkdir -p "$ZUMEN_OUT_DIR" || fail "出力先を作成できない: $ZUMEN_OUT_DIR"
@@ -230,7 +263,8 @@ SET MARKUP CSV ON QUOTE ON
 SET PAGESIZE 0 FEEDBACK OFF HEADING OFF TERMOUT OFF TRIMSPOOL ON LINESIZE 32767 ARRAYSIZE 1000
 SELECT
     p.part_number,
-    COALESCE(pv.name, p.name),
+    p.name,
+    pv.name,
     d.document_number,
     TO_CHAR(dv.version),
     TO_CHAR(dv.revision),
@@ -273,14 +307,78 @@ fi
 # Excel でそのまま開けるよう UTF-8 BOM 付き・CRLF で書く（09_export_copy_target.py と同じ）
 {
     printf '\xEF\xBB\xBF'
-    printf '"PART_NUMBER","PART_NAME","DOCUMENT_NUMBER","VER","REV","LIFECYCLE","FILE_BASE","FILE_MODIFIED_ON"\r\n'
+    printf '%s\r\n' "$ZUMEN_HEADER"
     sed 's/\r*$/\r/' "$ZUMEN_RAW"
 } > "$ZUMEN_CSV.tmp" || { rm -f "$ZUMEN_RAW" "$ZUMEN_CSV.tmp"; fail "CSV の書き出しに失敗した"; }
 
 # 読み取り中の半端なファイルを見せないよう、書き終えてから差し替える
 mv -f "$ZUMEN_CSV.tmp" "$ZUMEN_CSV" || fail "CSV の差し替えに失敗した"
 chmod 644 "$ZUMEN_CSV"
-rm -f "$ZUMEN_RAW"
 echo "-- 図面一覧: $ZUMEN_ROWS 行 / $(stat -c '%s' "$ZUMEN_CSV") バイト"
+
+
+# ------------------------------------------------------------
+# 10) 前回との差分を出力（行単位の 追加／削除）
+#     \esrv11\output\obbligate_copy\diff\obbligate_zumen_diff_<日付>.csv
+#
+#     9) の一覧を前回分とまるごと比べ、前回に無かった行を「追加」、
+#     前回にあって今回消えた行を「削除」として DIFF_TYPE 列を先頭に付ける。
+#     REV や更新日が変わった図面は「削除」＋「追加」の2行で現れる（キーを置かず
+#     全列を1行として比べるため、取りこぼしが出ない）。
+#     差分が無い日もヘッダー行だけの CSV を必ず作る（0行＝比較はした、の意）。
+#
+#     比較用の前回分は .obbligate_all_zumen.prev.csv（ヘッダー・BOM 無しの生データ）
+#     として1世代だけ持つ。⚠ 24MB のフル一覧を日ごとに残すと 700MB を超えるので、
+#     1か月分残すのは小さい差分 CSV だけにしてある。
+#     ⚠ 前回分の列構成は .prev.csv.header に控える。列を増減した直後に比べると
+#       全行が「削除＋追加」になり巨大な差分が出るため、構成が違えば初回と同じく 0 行にする。
+# ------------------------------------------------------------
+ZUMEN_PREV="$ZUMEN_OUT_DIR/.obbligate_all_zumen.prev.csv"
+ZUMEN_DIFF_DIR="$ZUMEN_OUT_DIR/diff"
+ZUMEN_DIFF="$ZUMEN_DIFF_DIR/obbligate_zumen_diff_$(date +%Y%m%d).csv"
+ZUMEN_ADDED="$ZUMEN_RAW.added"
+ZUMEN_DELETED="$ZUMEN_RAW.deleted"
+ZUMEN_PREV_HEADER="$ZUMEN_PREV.header"
+
+mkdir -p "$ZUMEN_DIFF_DIR" || fail "差分の出力先を作成できない: $ZUMEN_DIFF_DIR"
+: > "$ZUMEN_ADDED"
+: > "$ZUMEN_DELETED"
+
+if [ -s "$ZUMEN_PREV" ] && [ "$(cat "$ZUMEN_PREV_HEADER" 2>/dev/null)" != "$ZUMEN_HEADER" ]; then
+    # 列を増減した直後。比べると全行が差分になるので 0 行にする
+    echo "-- 前回分と列構成が違うため差分は 0 行（次回から比較する）"
+elif [ -s "$ZUMEN_PREV" ]; then
+    # comm は「同じ並び順で整列済み」が前提。ロケールで並びが変わらないよう LC_ALL=C で揃える
+    LC_ALL=C sort "$ZUMEN_RAW"  > "$ZUMEN_RAW.new" || fail "差分用の整列に失敗した（今回分）"
+    LC_ALL=C sort "$ZUMEN_PREV" > "$ZUMEN_RAW.old" || fail "差分用の整列に失敗した（前回分）"
+    LC_ALL=C comm -13 "$ZUMEN_RAW.old" "$ZUMEN_RAW.new" > "$ZUMEN_ADDED"   || fail "差分（追加）の抽出に失敗した"
+    LC_ALL=C comm -23 "$ZUMEN_RAW.old" "$ZUMEN_RAW.new" > "$ZUMEN_DELETED" || fail "差分（削除）の抽出に失敗した"
+    rm -f "$ZUMEN_RAW.new" "$ZUMEN_RAW.old"
+else
+    # 初回は比べる相手が無い。全件を「追加」として出すと 24MB になるので 0 行にする
+    echo "-- 前回分が無いため差分は 0 行（次回から比較する）"
+fi
+
+# 9) と同じく UTF-8 BOM 付き・CRLF
+{
+    printf '\xEF\xBB\xBF'
+    printf '"DIFF_TYPE",%s\r\n' "$ZUMEN_HEADER"
+    sed 's/^/"追加",/; s/\r*$/\r/' "$ZUMEN_ADDED"
+    sed 's/^/"削除",/; s/\r*$/\r/' "$ZUMEN_DELETED"
+} > "$ZUMEN_DIFF.tmp" || { rm -f "$ZUMEN_DIFF.tmp" "$ZUMEN_ADDED" "$ZUMEN_DELETED"; fail "差分の書き出しに失敗した"; }
+
+mv -f "$ZUMEN_DIFF.tmp" "$ZUMEN_DIFF" || fail "差分 CSV の差し替えに失敗した"
+chmod 644 "$ZUMEN_DIFF"
+echo "-- 差分: 追加 $(wc -l < "$ZUMEN_ADDED") 行 / 削除 $(wc -l < "$ZUMEN_DELETED") 行 → $ZUMEN_DIFF"
+
+# 次回の比較用に今回分を残す（書き終えてから差し替える）
+cp -f "$ZUMEN_RAW" "$ZUMEN_PREV.tmp" || fail "前回分の控えを書けない: $ZUMEN_PREV"
+mv -f "$ZUMEN_PREV.tmp" "$ZUMEN_PREV" || fail "前回分の差し替えに失敗した"
+chmod 644 "$ZUMEN_PREV"
+printf '%s\n' "$ZUMEN_HEADER" > "$ZUMEN_PREV_HEADER" || fail "前回分の列構成を書けない: $ZUMEN_PREV_HEADER"
+rm -f "$ZUMEN_RAW" "$ZUMEN_ADDED" "$ZUMEN_DELETED"
+
+# 1か月分だけ残す
+find "$ZUMEN_DIFF_DIR" -name 'obbligate_zumen_diff_*.csv' -mtime +30 -delete 2>/dev/null
 
 echo "=== $(date '+%F %T') refresh 正常終了 (impdp rc=$RC) ==="
