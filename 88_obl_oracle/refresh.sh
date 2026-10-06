@@ -252,7 +252,7 @@ find dmp  -name 'impdp_*.log'   -mtime +60 -delete 2>/dev/null   # impdp のロ�
 ZUMEN_OUT_DIR="${ZUMEN_OUT_DIR:-/home/docker-user/output/obbligate_copy}"
 ZUMEN_CSV="$ZUMEN_OUT_DIR/obbligate_all_zumen.csv"
 ZUMEN_RAW="dmp/obbligate_all_zumen.raw"
-ZUMEN_HEADER='"PART_NUMBER","PART_NAME","PART_VERSION_NAME","DOCUMENT_NUMBER","VER","REV","LIFECYCLE","FILE_BASE","FILE_MODIFIED_ON"'
+ZUMEN_HEADER='"PART_NUMBER","PART_NAME","PART_VERSION_NAME","DOCUMENT_NUMBER","DOCUMENT_NAME","VER","REV","LIFECYCLE","FILE_BASE","FILE_MODIFIED_ON"'
 
 echo "-- 図面一覧を出力中: $ZUMEN_CSV"
 mkdir -p "$ZUMEN_OUT_DIR" || fail "出力先を作成できない: $ZUMEN_OUT_DIR"
@@ -266,6 +266,7 @@ SELECT
     p.name,
     pv.name,
     d.document_number,
+    d.name,
     TO_CHAR(dv.version),
     TO_CHAR(dv.revision),
     dv.lifecycle_state_name,
@@ -380,5 +381,94 @@ rm -f "$ZUMEN_RAW" "$ZUMEN_ADDED" "$ZUMEN_DELETED"
 
 # 1か月分だけ残す
 find "$ZUMEN_DIFF_DIR" -name 'obbligate_zumen_diff_*.csv' -mtime +30 -delete 2>/dev/null
+
+
+# ------------------------------------------------------------
+# 11) 品目の単価・在庫情報の全件出力
+#     \esrv11\output\obbligate_copy\obbligate_part_price.csv
+#
+#     Obbligato へ取り込まれている単価CSV（E<日時>.csv）と同じ形式で、
+#     FKS_PART（PART_VERSION と1:1の独自属性）を全品番ぶん出す。
+#       - 1品番1行。版が複数あれば VERSION 最大の版の値を出す
+#       - 品目名は PART_VERSION.NAME。取込元CSVの品目名は Obbligato に
+#         書き込まれていない（登録元の名称）ため一致しない行がある
+#       - 書式は取込元CSVに合わせる: UTF-8 BOM 無し・CRLF・全項目を "" で囲み、
+#         行末に余分なカンマ。単価は整数なら小数点なし（504）、小数はそのまま（6142.5）
+#     ⚠ SET MARKUP CSV は使わず、1行を SQL で組み立てる（行末カンマと NULL の "" を
+#       取込元CSVと同じにするため）
+# ------------------------------------------------------------
+PRICE_CSV="$ZUMEN_OUT_DIR/obbligate_part_price.csv"
+PRICE_RAW="dmp/obbligate_part_price.raw"
+PRICE_HEADER='"品目番号","品目名","在庫数","単価","発注担当者","保管区","仕入先",'
+
+echo "-- 単価・在庫情報を出力中: $PRICE_CSV"
+
+sq > "$PRICE_RAW" <<'SQL'
+WHENEVER SQLERROR EXIT 1
+SET PAGESIZE 0 FEEDBACK OFF HEADING OFF TERMOUT OFF TRIMOUT ON TRIMSPOOL ON LINESIZE 32767 ARRAYSIZE 1000
+SELECT '"' || REPLACE(part_number, '"', '""') || '",'
+    || '"' || REPLACE(name,        '"', '""') || '",'
+    || '"' || REPLACE(stock,       '"', '""') || '",'
+    || '"' || RTRIM(TO_CHAR(price, 'FM999999999999990.99999999'), '.') || '",'
+    || '"' || REPLACE(person,      '"', '""') || '",'
+    || '"' || REPLACE(place,       '"', '""') || '",'
+    || '"' || REPLACE(supplier,    '"', '""') || '",'
+FROM (
+    SELECT p.part_number,
+           pv.name,
+           f.fks_prt_stock_count   AS stock,
+           f.fks_prt_unit_price    AS price,
+           f.fks_prt_order_person  AS person,
+           f.fks_prt_storage_place AS place,
+           f.fks_prt_supplier      AS supplier,
+           ROW_NUMBER() OVER (
+               PARTITION BY p.identification
+               ORDER BY TO_NUMBER(pv.version DEFAULT -1 ON CONVERSION ERROR) DESC
+           ) AS rn
+    FROM obl.part p
+    JOIN obl.part_version pv ON pv.super_identification = p.identification
+    JOIN obl.fks_part     f  ON f.super_identification  = pv.identification
+)
+WHERE rn = 1
+ORDER BY part_number;
+EXIT
+SQL
+RC_PRICE=$?
+
+if [ $RC_PRICE -ne 0 ]; then
+    rm -f "$PRICE_RAW"
+    fail "単価・在庫情報の抽出に失敗した (rc=$RC_PRICE)"
+fi
+if grep -qE '^(ORA|SP2)-[0-9]' "$PRICE_RAW"; then
+    grep -m3 -E '^(ORA|SP2)-[0-9]' "$PRICE_RAW"
+    rm -f "$PRICE_RAW"
+    fail "単価・在庫情報の抽出中にエラーが出た"
+fi
+PRICE_ROWS=$(wc -l < "$PRICE_RAW")
+if [ "$PRICE_ROWS" -lt 100000 ]; then
+    rm -f "$PRICE_RAW"
+    fail "単価・在庫情報が $PRICE_ROWS 行しかない（抽出失敗の疑い）"
+fi
+
+# ⚠ DB には Shift-JIS のバイトのまま入った品番がある（4119-67T0130017402ﾚｰｽS。2026-10-06 確認）。
+#   そのまま出すとファイル全体が UTF-8 として開けなくなるため、UTF-8 として読めない項目は
+#   ASCII 以外のバイトをすべて ? にする（→ 4119-67T0130017402???S）。
+#   バイト単位で置き換えないのは、先頭の2バイトがたまたま UTF-8 として読めて
+#   別の文字（ڰ）に化け、文字化けと気づきにくくなるため
+{
+    printf '%s\r\n' "$PRICE_HEADER"
+    perl -MEncode -pe '
+        s{"((?:[^"]|"")*)"}{
+            my $f = $1;
+            eval { Encode::decode("UTF-8", $f, Encode::FB_CROAK | Encode::LEAVE_SRC); 1 }
+                or $f =~ s/[\x80-\xFF]/?/g;
+            "\"$f\""
+        }ge' "$PRICE_RAW" | sed 's/\r*$/\r/'
+} > "$PRICE_CSV.tmp" || { rm -f "$PRICE_RAW" "$PRICE_CSV.tmp"; fail "単価・在庫情報の書き出しに失敗した"; }
+
+mv -f "$PRICE_CSV.tmp" "$PRICE_CSV" || fail "単価・在庫情報の差し替えに失敗した"
+chmod 644 "$PRICE_CSV"
+rm -f "$PRICE_RAW"
+echo "-- 単価・在庫情報: $PRICE_ROWS 行 / $(stat -c '%s' "$PRICE_CSV") バイト"
 
 echo "=== $(date '+%F %T') refresh 正常終了 (impdp rc=$RC) ==="

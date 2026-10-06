@@ -75,6 +75,7 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
     ↓ 件数検証（0件なら異常終了）
     ↓ 図面一覧を出力（output/obbligate_copy/obbligate_all_zumen.csv・約4秒）
     ↓ 前回との差分を diff/obbligate_zumen_diff_<日付>.csv に出力（30日保持）
+    ↓ 品目の単価・在庫情報を出力（output/obbligate_copy/obbligate_part_price.csv）
   logs/refresh_<日時>.log に記録（60日で自動削除）
 ```
 
@@ -92,7 +93,9 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 |---|---|
 | PART_NUMBER / PART_NAME | 品番・品名（`part.part_number` / `part.name`） |
 | PART_VERSION_NAME | 版の品名（`part_version.name`。Approved の最新版）。PART_NAME とは別に並べて出す |
-| DOCUMENT_NUMBER / VER / REV | 図番・版数・改訂 |
+| DOCUMENT_NUMBER | 図番 |
+| DOCUMENT_NAME | 図面名（`document.name`） |
+| VER / REV | 版数・改訂 |
 | LIFECYCLE | `document_version.lifecycle_state_name` |
 | FILE_BASE | **図番 + REVISION 2桁**（`VERSION` ではない。拡張子なし） |
 | FILE_MODIFIED_ON | `document_entry.file_modify_date`（UNIX秒）を `YYYY-MM-DD` に |
@@ -132,6 +135,28 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 - ⚠ **並べ替えは `LC_ALL=C`。** `comm` は「同じ並び順で整列済み」が前提なので、
   ロケールで並びが変わると差分が壊れる
 - 更新が無くてスキップした日は差分も作られない（＝その日付のファイルができない）
+
+## 品目の単価・在庫情報（obbligate_part_price.csv）
+
+`refresh.sh` の 11) で **`\\esrv11\output\obbligate_copy\obbligate_part_price.csv`** へ全品番を出力する
+（約40万行・28MB・毎回まるごと作り直し）。Obbligato へ取り込まれている単価CSV（`E<日時>.csv`）と同じ形式。
+
+| 列 | 内容 |
+|---|---|
+| 品目番号 | `part.part_number` |
+| 品目名 | `part_version.name` |
+| 在庫数 / 単価 / 発注担当者 / 保管区 / 仕入先 | `fks_part.fks_prt_stock_count` / `fks_prt_unit_price` / `fks_prt_order_person` / `fks_prt_storage_place` / `fks_prt_supplier` |
+
+- `fks_part` は **`part_version` と1:1**（`fks_part.super_identification = part_version.identification`）。
+  1品番1行にするため **VERSION 最大の版**を採る
+- **書式は取込元CSVに合わせる**: UTF-8 **BOM 無し**・CRLF・全項目を `""` で囲み、**行末に余分なカンマ**。
+  単価は整数なら小数点なし（`504`）、小数はそのまま（`6142.5`）。そのため `SET MARKUP CSV` を使わず1行を SQL で組み立てている
+- ⚠ **品目名は取込元CSVと一致しない行がある**（2026-07-03 分で 2,280件中44件）。取込元の品目名は
+  Obbligato に書き込まれない（登録元の名称）ため。突合は**品目番号＋5項目**で行う（5項目は全件一致を確認済み）
+- ⚠ **DB に Shift-JIS のバイトのまま入った品番がある**（`4119-67T0130017402ﾚｰｽS`）。そのまま出すと
+  ファイル全体が UTF-8 で開けなくなるため、**UTF-8 として読めない項目は ASCII 以外のバイトをすべて `?` にする**
+  （→ `4119-67T0130017402???S`）。項目単位なのは、バイト単位だと一部がたまたま UTF-8 として読めて
+  別の文字（`ڰ`）に化けるため
 
 ## 触るときの注意
 
