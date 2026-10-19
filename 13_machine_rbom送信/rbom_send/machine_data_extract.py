@@ -47,6 +47,37 @@ os.makedirs(LOG_DIR, exist_ok=True)
 # 日本時間のタイムゾーン
 JST = timezone(timedelta(hours=9))
 
+# ========== 特定5部品の実績返却先リダイレクト ==========
+# 現品票発行（90_tools/50_tools/genpin_check/1_現品票発行.py の時限処理 20260115追加）が
+# この5部品だけ「払出先40を除外・60を通過」させているため、40側の伝票には現品票が出ず、
+# i-Reporter のチェックシートは払出先60の伝票にしか作られない。
+# その結果、実績は60側にしか返らず40側の指示がSTATUS='1'のまま残り続ける。
+#
+# そこで5部品に限り、i-Reporter が持つINDNO（＝60側）ではなく、
+# 「同一SEINO・同一OYALISTNO で 払出先(D3410.SRCD)=40」のINDNOへ実績を返す。
+# OYALISTNO は D3420.LISTNO を D3110 で引いた親LISTNOで、/instructions/ の応答に含まれる。
+# ※60側へは送信しない（差し替え）。LINENOの範囲は現行どおり
+#   （パターン1=LINENO=1のみ / パターン3=リダイレクト先の全LINENO）。
+SPECIAL_PART_NAMES = frozenset({
+    'SINKER REST RING',
+    'NEEDLE DIAL',
+    'NEEDLE CYLINDER',
+    'SINKER DIAL',
+    'WRAP DIAL',
+})
+SPECIAL_PART_TARGET_SRCD = '40'
+
+# ========== SEINO+HMCD による返却先INDNOの解決 ==========
+# INDNO は作業開始後に再発行されることがある（旧INDNOは rBOM 側で消える／完了扱いになる）ため、
+# i-Reporter が持つINDNOではなく「同一SEINO・同一HMCD で 払出先(SRCD)=40」の現行INDNOへ実績を返す。
+# .env の PATTERN3_<ID>_MODE=seino_hmcd で有効化（現状は405＝マシニング課のみ）。
+#   - 旧INDNOが月次指示データにある → rBOM側のSEINO・HMCDを使う（SEINOは完全一致）
+#   - 無い（rBOM側で消えた）        → i-Reporter 側の SEINO末尾(SEINO_COLUMN)・HMCD(HMCD_COLUMN) を使う
+#                                     （SEINOは短縮されているため末尾一致）
+# 解決した全INDNOの全LINENOへ送る。SEINO先頭2桁が数字なら年（26=2026年）とみなし、前年以前は送らない。
+RESOLVE_MODE_SEINO_HMCD = 'seino_hmcd'
+SEINO_HMCD_TARGET_SRCD = '40'
+
 
 def load_pattern3_configs():
     """
@@ -76,9 +107,10 @@ def load_pattern3_configs():
         judge_col = os.getenv(f'PATTERN3_{table_id}_JUDGE_COLUMN', '')
         date_col = os.getenv(f'PATTERN3_{table_id}_DATE_COLUMN', '')
         iptancd = os.getenv(f'PATTERN3_{table_id}_IPTANCD', '')
-        # 334専用: SEINO+HMNMマッチングモード
+        # 334専用: SEINO+HMNMマッチングモード / seino_hmcd: SEINO+HMCDで返却先INDNOを解決（405）
         mode = os.getenv(f'PATTERN3_{table_id}_MODE', '')
         hmnm_filter = os.getenv(f'PATTERN3_{table_id}_HMNM_FILTER', '')
+        hmcd_col = os.getenv(f'PATTERN3_{table_id}_HMCD_COLUMN', '')
 
         # 必須項目チェック: source_table, judge_col, date_col, iptancd は必須
         # indno_col は "FROM_API" の場合、seino_col と ktcd_col も必須
@@ -97,6 +129,12 @@ def load_pattern3_configs():
                 logger.warning(f"パターン3設定不完全: {table} (indno_col=FROM_API の場合、seino_col と ktcd_col が必須です)")
                 continue
 
+        # seino_hmcd モードは SEINO_COLUMN（末尾）と HMCD_COLUMN が必須
+        if mode == RESOLVE_MODE_SEINO_HMCD:
+            if not (seino_col and hmcd_col):
+                logger.warning(f"パターン3設定不完全: {table} (mode={RESOLVE_MODE_SEINO_HMCD} の場合、seino_col と hmcd_col が必須です)")
+                continue
+
         configs.append({
             'table': table,
             'source_table': source_table,
@@ -107,7 +145,8 @@ def load_pattern3_configs():
             'date_col': date_col,
             'iptancd': iptancd,
             'mode': mode,
-            'hmnm_filter': hmnm_filter
+            'hmnm_filter': hmnm_filter,
+            'hmcd_col': hmcd_col
         })
 
     return configs
@@ -169,7 +208,6 @@ def load_indno_mapping():
                         mapping[lot_number] = indno
 
         conn.close()
-        logger.info(f"INDNOマッピング読み込み完了: {len(mapping)}件")
 
     except Exception as e:
         logger.error(f"INDNOマッピング読み込みエラー: {e}")
@@ -224,7 +262,6 @@ def cleanup_old_logs(log_dir, retention_days):
 
                 if age_days > retention_days:
                     os.remove(file_path)
-                    logger.info(f"古いログファイルを削除しました: {filename}")
     except Exception as e:
         logger.warning(f"ログクリーンアップ中にエラー: {e}")
 
@@ -257,50 +294,32 @@ def extract_data_from_postgres():
     Returns:
         pd.DataFrame or None: 取得したデータ、失敗時はNone
     """
-    logger.info("=" * 60)
-    logger.info("PostgreSQL データ取得処理を開始")
-    logger.info("=" * 60)
-
     try:
         # カラムリスト生成
         columns = generate_column_list()
-        logger.info(f"取得対象カラム数: {len(columns)}列")
 
         # SQL文生成
         column_str = ', '.join(columns)
         sql = f"SELECT {column_str} FROM view_report_405"
 
         # PostgreSQL接続
-        logger.info(f"データベースに接続中: {DB_URL.split('@')[1]}")  # パスワード部分は非表示
         engine = create_engine(DB_URL, echo=False)
 
         # データ取得
-        logger.info("view_report_405 からデータ取得中...")
         with engine.connect() as connection:
             df = pd.read_sql(sql, connection)
 
-        logger.info(f"データ取得完了: {len(df):,}行 × {len(df.columns)}列")
-
         # デバッグ用: CSV出力（ENABLE_CSV_OUTPUT=true の場合のみ）
         if ENABLE_CSV_OUTPUT:
-            logger.info("")
-            logger.info("--- デバッグモード: CSV出力 ---")
             timestamp = datetime.now(JST).strftime('%Y%m%d_%H%M%S')
             output_filename = f"machine_data_{timestamp}.csv"
             output_path = os.path.join(OUTPUT_DIR, output_filename)
-
             df.to_csv(output_path, index=False, encoding='utf-8-sig')
-
-            file_size = os.path.getsize(output_path)
-            logger.info(f"✓ CSV出力完了: {output_filename} ({file_size:,} bytes)")
-            logger.info(f"  出力先: {os.path.abspath(output_path)}")
-            logger.info("--- デバッグモード終了 ---")
-            logger.info("")
 
         return df
 
     except Exception as e:
-        logger.error(f"✗ エラーが発生しました: {e}")
+        logger.error(f"PostgreSQLデータ取得エラー: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return None
@@ -324,15 +343,13 @@ def fetch_data_from_table(table_name):
         engine = create_engine(DB_URL, echo=False)
 
         # データ取得
-        logger.info(f"{table_name} からデータ取得中...")
         with engine.connect() as connection:
             df = pd.read_sql(sql, connection)
 
-        logger.info(f"✓ データ取得完了: {len(df):,}行 × {len(df.columns)}列")
         return df
 
     except Exception as e:
-        logger.error(f"✗ {table_name} からのデータ取得エラー: {e}")
+        logger.error(f"{table_name} からのデータ取得エラー: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return None
@@ -384,7 +401,7 @@ async def fetch_indno_from_api(seino, ktcd, api_base_url, read_api_key):
             return None
 
     except Exception as e:
-        logger.error(f"✗ API経由でのINDNO取得エラー (SEINO={seino}, KTCD={ktcd}): {e}")
+        logger.error(f"API経由でのINDNO取得エラー (SEINO={seino}, KTCD={ktcd}): {e}")
         return None
 
 
@@ -436,8 +453,6 @@ def filter_by_date_column(df, date_column, display_name=None):
                 logger.error(f"月カラム '{month_column}' が存在しません")
                 return pd.DataFrame()
 
-            logger.info(f"年月分離モード: 年={year_column}, 月={month_column}")
-
             # 現在の日本時間
             now = datetime.now(JST)
             current_year_month = now.strftime('%Y%m')
@@ -451,7 +466,6 @@ def filter_by_date_column(df, date_column, display_name=None):
             next_next_month_str = next_next_month.strftime('%Y%m')
 
             target_months = [current_year_month, next_month_str, next_next_month_str]
-            logger.info(f"対象月フィルタリング ({display_name}): {', '.join(target_months)}")
 
             # 年と月を結合してYYYYMM形式にする（月は0埋め）
             temp_col_name = f'{year_column}_{month_column}_ym'
@@ -485,7 +499,6 @@ def filter_by_date_column(df, date_column, display_name=None):
             next_next_month_str = next_next_month.strftime('%Y%m')
 
             target_months = [current_year_month, next_month_str, next_next_month_str]
-            logger.info(f"対象月フィルタリング ({display_name}): {', '.join(target_months)}")
 
             # 日付カラムの先頭6文字を抽出（一時カラム名を動的に生成）
             temp_col_name = f'{date_column}_ym'
@@ -493,10 +506,6 @@ def filter_by_date_column(df, date_column, display_name=None):
 
             # 対象月のデータのみ抽出
             df_filtered = df[df[temp_col_name].isin(target_months)].copy()
-
-        original_count = len(df)
-        filtered_count = len(df_filtered)
-        logger.info(f"{display_name}フィルタリング結果: {original_count:,}行 → {filtered_count:,}行 ({original_count - filtered_count:,}行除外)")
 
         return df_filtered
 
@@ -523,7 +532,6 @@ def filter_by_cluster_flags(df):
 
         # 存在するカラムのみ対象
         existing_columns = [col for col in cluster_columns if col in df.columns]
-        logger.info(f"チェック対象カラム数: {len(existing_columns)}")
 
         if not existing_columns:
             logger.warning("cluster_1_*_n カラムが見つかりません")
@@ -532,10 +540,6 @@ def filter_by_cluster_flags(df):
         # いずれかのカラムが 1.0 の行を抽出
         mask = df[existing_columns].eq(1.0).any(axis=1)
         df_filtered = df[mask]
-
-        original_count = len(df)
-        filtered_count = len(df_filtered)
-        logger.info(f"clusterフラグフィルタリング結果: {original_count:,}行 → {filtered_count:,}行 ({original_count - filtered_count:,}行除外)")
 
         return df_filtered
 
@@ -599,14 +603,52 @@ def filter_by_judge_column(df, judge_column, display_name=None):
         mask = df[judge_column].apply(is_2_or_4)
         df_filtered = df[mask].copy()
 
-        original_count = len(df)
-        filtered_count = len(df_filtered)
-        logger.info(f"{display_name}フィルタリング結果: {original_count:,}行 → {filtered_count:,}行 ({original_count - filtered_count:,}行除外)")
-
         return df_filtered
 
     except Exception as e:
         logger.error(f"{display_name}フィルタリングに失敗しました: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return df
+
+
+def filter_out_202603_and_later(df, date_column='top_remarks3', display_name=None):
+    """
+    202603以降のデータを除外する時限処理
+
+    ※この処理が不要になったら、呼び出し箇所をコメントアウトしてください
+
+    Args:
+        df (pd.DataFrame): 入力データ
+        date_column (str): 日付カラム名（YYYYMMDD形式、先頭6桁をYYYYMMとして使用）
+        display_name (str): ログ表示用名称（省略時は date_column を使用）
+
+    Returns:
+        pd.DataFrame: フィルタリング後のデータ（202602以前のみ）
+    """
+    if display_name is None:
+        display_name = date_column
+
+    try:
+        # カラムが存在するかチェック
+        if date_column not in df.columns:
+            logger.warning(f"カラム '{date_column}' が存在しません。202603以降除外フィルタをスキップします。")
+            return df
+
+        # 日付カラムの先頭6文字を取得（YYYYMM）
+        temp_col_name = f'{date_column}_yyyymm_temp'
+        df[temp_col_name] = df[date_column].astype(str).str[:6]
+
+        # 202602以前のデータのみ抽出（202603以降を除外）
+        df_filtered = df[df[temp_col_name] <= '202602'].copy()
+
+        # 一時カラムを削除
+        df_filtered = df_filtered.drop(columns=[temp_col_name], errors='ignore')
+
+        return df_filtered
+
+    except Exception as e:
+        logger.error(f"202603以降除外処理に失敗しました ({display_name}): {e}")
         import traceback
         logger.error(traceback.format_exc())
         return df
@@ -653,9 +695,14 @@ def is_sendable_status(instruction):
     return True
 
 
+# 月次指示データの実行中キャッシュ {(year, month): [instruction, ...]}
+# 同じ月を複数のテーブル・パターンで参照するため、1回の実行では取得を1度に抑える。
+_MONTHLY_INSTRUCTIONS_CACHE = {}
+
+
 async def get_instructions_by_month(client, api_base_url, read_api_key, year, month):
     """
-    指定月の指示データを全件取得
+    指定月の指示データを全件取得（同一実行中はキャッシュを再利用）
 
     Args:
         client (httpx.AsyncClient): HTTPクライアント
@@ -667,6 +714,10 @@ async def get_instructions_by_month(client, api_base_url, read_api_key, year, mo
     Returns:
         list: 指示データのリスト
     """
+    cache_key = (year, month)
+    if cache_key in _MONTHLY_INSTRUCTIONS_CACHE:
+        return _MONTHLY_INSTRUCTIONS_CACHE[cache_key]
+
     api_url = f"{api_base_url}/instructions/"
     headers = {
         "X-API-KEY": read_api_key
@@ -677,8 +728,6 @@ async def get_instructions_by_month(client, api_base_url, read_api_key, year, mo
     }
 
     try:
-        logger.info(f"月次データ取得開始: {year}年{month}月")
-
         response = await client.get(
             api_url,
             headers=headers,
@@ -688,8 +737,7 @@ async def get_instructions_by_month(client, api_base_url, read_api_key, year, mo
         response.raise_for_status()
 
         instructions = response.json()
-        logger.info(f"月次データ取得完了: {year}年{month}月 - {len(instructions)}件")
-
+        _MONTHLY_INSTRUCTIONS_CACHE[cache_key] = instructions
         return instructions
 
     except httpx.HTTPStatusError as e:
@@ -705,9 +753,206 @@ async def get_instructions_by_month(client, api_base_url, read_api_key, year, mo
         return []
 
 
+def get_target_year_months():
+    """
+    対象月（当月・翌月・翌々月）を (year, month) のリストで返す
+
+    filter_by_date_column() が抽出する月と同一。リダイレクト用インデックスの
+    構築範囲を決めるために使用する。
+    """
+    now = datetime.now(JST)
+    months = [(now.year, now.month)]
+    for _ in range(2):
+        year, month = months[-1]
+        months.append((year + 1, 1) if month == 12 else (year, month + 1))
+    return months
+
+
+def build_special_part_redirect_index(instructions):
+    """
+    月次指示データから、特定5部品のリダイレクト解決用インデックスを構築
+
+    Args:
+        instructions (list): /instructions/ の応答（INDNO, SEINO, HMNM, SRCD, OYALISTNO を含む）
+
+    Returns:
+        dict: {'by_indno': {INDNO: {...}}, 'by_oya': {(SEINO, OYALISTNO): {INDNO, ...}}}
+    """
+    by_indno = {}
+    by_oya = {}
+
+    for instruction in instructions:
+        indno = str(instruction.get('INDNO') or '').strip()
+        if not indno:
+            continue
+
+        info = by_indno.get(indno)
+        if info is None:
+            info = {
+                'hmnm': str(instruction.get('HMNM') or '').strip(),
+                'srcd': str(instruction.get('SRCD') or '').strip(),
+                'oya_keys': set(),
+            }
+            by_indno[indno] = info
+
+        seino = str(instruction.get('SEINO') or '').strip()
+        oyalistno = str(instruction.get('OYALISTNO') or '').strip()
+        if seino and oyalistno:
+            oya_key = (seino, oyalistno)
+            info['oya_keys'].add(oya_key)
+            by_oya.setdefault(oya_key, set()).add(indno)
+
+    return {'by_indno': by_indno, 'by_oya': by_oya}
+
+
+def resolve_special_part_targets(indno, redirect_index):
+    """
+    特定5部品の実績返却先INDNOを解決
+
+    D3420.LISTNO を D3110 で引いた OYALISTNO（/instructions/ の応答に含まれる）が
+    同一かつ同一SEINOの指示のうち、払出先(SRCD)=40 のINDNOを返す。
+
+    Args:
+        indno (str): i-Reporter 由来のINDNO（INDNO変換済み）
+        redirect_index (dict): build_special_part_redirect_index() の戻り値
+
+    Returns:
+        tuple: (特定5部品か, 返却先INDNOのリスト)
+               特定5部品でない場合は (False, [])。
+               特定5部品だが40側が見つからない場合は (True, [])。
+    """
+    if not redirect_index:
+        return False, []
+
+    info = redirect_index['by_indno'].get(indno)
+    if info is None or info['hmnm'] not in SPECIAL_PART_NAMES:
+        return False, []
+
+    # 既に払出先40の伝票（チェックシートが40側に作られたケース）はそのまま返す
+    if info['srcd'] == SPECIAL_PART_TARGET_SRCD:
+        return True, [indno]
+
+    targets = set()
+    for oya_key in info['oya_keys']:
+        for candidate in redirect_index['by_oya'].get(oya_key, ()):
+            if candidate == indno:
+                continue
+            candidate_info = redirect_index['by_indno'].get(candidate)
+            if candidate_info and candidate_info['srcd'] == SPECIAL_PART_TARGET_SRCD:
+                targets.add(candidate)
+
+    return True, sorted(targets)
+
+
+def get_cell_text(row, column):
+    """行のセル値を前後空白除去した文字列で返す（欠損は空文字）"""
+    value = row.get(column)
+    if value is None or pd.isna(value):
+        return ''
+    return str(value).strip()
+
+
+def get_seino_year(seino):
+    """SEINO先頭2桁が数字ならその値（西暦下2桁。26=2026年）、数字でなければ None"""
+    head = str(seino or '')[:2]
+    return int(head) if len(head) == 2 and head.isdigit() else None
+
+
+def build_seino_hmcd_index(instructions):
+    """
+    月次指示データから、払出先40の {HMCD: {(SEINO, INDNO), ...}} を構築
+
+    Args:
+        instructions (list): /instructions/ の応答（INDNO, SEINO, HMCD, SRCD を含む）
+    """
+    index = {}
+    for instruction in instructions:
+        if str(instruction.get('SRCD') or '').strip() != SEINO_HMCD_TARGET_SRCD:
+            continue
+        indno = str(instruction.get('INDNO') or '').strip()
+        seino = str(instruction.get('SEINO') or '').strip()
+        hmcd = str(instruction.get('HMCD') or '').strip()
+        if indno and seino and hmcd:
+            index.setdefault(hmcd, set()).add((seino, indno))
+    return index
+
+
+def resolve_targets_by_seino_hmcd(send_indno, row, seino_column, hmcd_column, indno_instructions, seino_hmcd_index, current_yy):
+    """
+    SEINO+HMCD（払出先40）で実績の返却先INDNOを解決
+
+    Args:
+        send_indno (str): i-Reporter 由来のINDNO（INDNO変換済み）
+        row (pd.Series): 405等の行（SEINO末尾・HMCDの取得元）
+        seino_column (str): SEINO末尾カラム名
+        hmcd_column (str): HMCDカラム名
+        indno_instructions (dict): {INDNO: [指示データ, ...]}（月次）
+        seino_hmcd_index (dict): build_seino_hmcd_index() の戻り値
+        current_yy (int): 今年（西暦下2桁）。これより小さい年のSEINOは対象外
+
+    Returns:
+        tuple: (理由, 返却先INDNOのリスト)
+               理由は None=解決 / 'no_key'=SEINO・HMCD取得不可 / 'not_found'=払出先40に該当なし /
+               'past_year'=前年以前の製番のみ / 'ambiguous'=SEINO末尾一致が複数
+    """
+    # (SEINO, HMCD, 完全一致か)。旧INDNOが rBOM にあれば rBOM の値、無ければ i-Reporter の値を使う
+    keys = []
+    old_instructions = indno_instructions.get(send_indno)
+    if old_instructions:
+        pairs = {
+            (str(i.get('SEINO') or '').strip(), str(i.get('HMCD') or '').strip())
+            for i in old_instructions
+        }
+        keys = [(seino, hmcd, True) for seino, hmcd in pairs if seino and hmcd]
+    else:
+        seino = get_cell_text(row, seino_column)
+        hmcd = get_cell_text(row, hmcd_column)
+        if seino and hmcd:
+            keys = [(seino, hmcd, False)]
+    if not keys:
+        return 'no_key', []
+
+    matches = set()
+    suffix_match = False
+    for seino, hmcd, exact in keys:
+        for candidate_seino, candidate_indno in seino_hmcd_index.get(hmcd, ()):
+            if exact:
+                if candidate_seino == seino:
+                    matches.add((candidate_seino, candidate_indno))
+            elif candidate_seino.endswith(seino):
+                suffix_match = True
+                matches.add((candidate_seino, candidate_indno))
+    if not matches:
+        return 'not_found', []
+
+    # 前年以前の製番は対象外（先頭が数字でないSEINOは年を判定できないので除外しない）
+    current = set()
+    for seino, indno in matches:
+        year = get_seino_year(seino)
+        if year is None or year >= current_yy:
+            current.add((seino, indno))
+    if not current:
+        return 'past_year', []
+
+    # 末尾一致で別SEINOが混ざった場合は特定できないので送らない
+    if suffix_match and len({seino for seino, _ in current}) > 1:
+        return 'ambiguous', []
+
+    return None, sorted({indno for _, indno in current})
+
+
+# 指示データ一括取得の1リクエストあたり件数上限。
+# 大量のslip_keysを1回で投げると、バックエンドのOracle呼び出しが
+# call timeout (30秒, DPY-4024/ORA-03156) を超えてHTTP 500になるため分割する。
+INSTRUCTIONS_BATCH_CHUNK_SIZE = 100
+
+
 async def get_instructions_batch(client, api_base_url, read_api_key, slip_keys):
     """
     複数の指示データを一括取得
+
+    slip_keys を INSTRUCTIONS_BATCH_CHUNK_SIZE 件ずつに分割して複数回POSTし、
+    結果のキャッシュをマージして返す（Oracle call timeout 回避のため）。
 
     Args:
         client (httpx.AsyncClient): HTTPクライアント
@@ -727,47 +972,47 @@ async def get_instructions_batch(client, api_base_url, read_api_key, slip_keys):
         "Content-Type": "application/json"
     }
 
-    try:
-        logger.info(f"指示データ一括取得開始: {len(slip_keys)}件")
+    instruction_cache = {}
+    total_chunks = (len(slip_keys) + INSTRUCTIONS_BATCH_CHUNK_SIZE - 1) // INSTRUCTIONS_BATCH_CHUNK_SIZE
 
-        response = await client.post(
-            api_url,
-            headers=headers,
-            json=slip_keys,
-            timeout=30.0
-        )
-        response.raise_for_status()
+    for chunk_index in range(total_chunks):
+        start = chunk_index * INSTRUCTIONS_BATCH_CHUNK_SIZE
+        chunk = slip_keys[start:start + INSTRUCTIONS_BATCH_CHUNK_SIZE]
 
-        instructions = response.json()
-        logger.info(f"指示データ一括取得完了: {len(instructions)}件")
+        try:
+            response = await client.post(
+                api_url,
+                headers=headers,
+                json=chunk,
+                timeout=60.0
+            )
+            response.raise_for_status()
 
-        # 必要な4項目のみをキャッシュ
-        instruction_cache = {}
-        for instruction in instructions:
-            indno = instruction.get('INDNO', '')
-            lineno = instruction.get('LINENO', 0)
-            key = (indno, lineno)
+            instructions = response.json()
 
-            instruction_cache[key] = {
-                'STATUS': instruction.get('STATUS', ''),
-                'SYORIZUMIKB': instruction.get('SYORIZUMIKB', ''),
-                'EDKKBN': instruction.get('EDKKBN', ''),
-                'THQTY': instruction.get('THQTY')
-            }
+            # 必要な4項目のみをキャッシュ
+            for instruction in instructions:
+                indno = instruction.get('INDNO', '')
+                lineno = instruction.get('LINENO', 0)
+                key = (indno, lineno)
 
-        return instruction_cache
+                instruction_cache[key] = {
+                    'STATUS': instruction.get('STATUS', ''),
+                    'SYORIZUMIKB': instruction.get('SYORIZUMIKB', ''),
+                    'EDKKBN': instruction.get('EDKKBN', ''),
+                    'THQTY': instruction.get('THQTY')
+                }
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"指示データ一括取得エラー: HTTP {e.response.status_code} - {e.response.text}")
-        return {}
-    except httpx.RequestError as e:
-        logger.error(f"指示データ一括取得接続エラー: {e}")
-        return {}
-    except Exception as e:
-        logger.error(f"指示データ一括取得予期しないエラー: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return {}
+        except httpx.HTTPStatusError as e:
+            logger.error(f"指示データ一括取得エラー (チャンク {chunk_index + 1}/{total_chunks}): HTTP {e.response.status_code} - {e.response.text}")
+        except httpx.RequestError as e:
+            logger.error(f"指示データ一括取得接続エラー (チャンク {chunk_index + 1}/{total_chunks}): {e}")
+        except Exception as e:
+            logger.error(f"指示データ一括取得予期しないエラー (チャンク {chunk_index + 1}/{total_chunks}): {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    return instruction_cache
 
 
 async def send_completion_record(client, api_url, api_key, payload, row_info):
@@ -800,22 +1045,21 @@ async def send_completion_record(client, api_url, api_key, payload, row_info):
 
         response_data = response.json()
         message = response_data.get('message', 'Success')
-        logger.info(f"  [{row_info}] ✓ 送信成功: INDNO={payload['INDNO']}, DATE={payload['KTEDDT']}, QTY={payload['ktedqty']}")
         return True, message
 
     except httpx.HTTPStatusError as e:
         error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
-        logger.error(f"  [{row_info}] ✗ 送信失敗: INDNO={payload['INDNO']} - {error_msg}")
+        logger.error(f"送信失敗 [{row_info}]: INDNO={payload['INDNO']} - {error_msg}")
         return False, error_msg
 
     except httpx.RequestError as e:
         error_msg = f"接続エラー: {e}"
-        logger.error(f"  [{row_info}] ✗ 送信失敗: INDNO={payload['INDNO']} - {error_msg}")
+        logger.error(f"送信失敗 [{row_info}]: INDNO={payload['INDNO']} - {error_msg}")
         return False, error_msg
 
     except Exception as e:
         error_msg = f"予期しないエラー: {e}"
-        logger.error(f"  [{row_info}] ✗ 送信失敗: INDNO={payload['INDNO']} - {error_msg}")
+        logger.error(f"送信失敗 [{row_info}]: INDNO={payload['INDNO']} - {error_msg}")
         import traceback
         logger.error(traceback.format_exc())
         return False, error_msg
@@ -843,19 +1087,24 @@ async def process_dataframe_data(df, api_base_url, read_api_key, insert_api_key,
     error_count = 0
     blocked_count = 0
     converted_count = 0  # INDNO変換カウント
-
-    logger.info(f"データ処理を開始します: 全{total_rows}件\n")
-    if indno_mapping:
-        logger.info(f"INDNOマッピング: {len(indno_mapping)}件のマッピング適用可能\n")
+    redirected_count = 0  # 特定5部品のリダイレクトカウント
 
     # 日本時間の今日の日付（YYYY-MM-DD形式）
     kteddt = datetime.now(JST).strftime('%Y-%m-%d')
-    logger.info(f"KTEDDT（日本時間システム日付）: {kteddt}\n")
 
     async with httpx.AsyncClient() as client:
+        # 特定5部品のリダイレクト用インデックスを構築（対象月＝当月・翌月・翌々月）
+        redirect_instructions = []
+        for year, month in get_target_year_months():
+            redirect_instructions.extend(
+                await get_instructions_by_month(client, api_base_url, read_api_key, year, month)
+            )
+        redirect_index = build_special_part_redirect_index(redirect_instructions)
+
         # ステップ1: 事前処理 - 全INDNOリストを作成（INDNO変換もここで行う）
         slip_keys = []
         valid_rows = []
+        special_unresolved = []  # 特定5部品だが払出先40の指示が見つからなかったINDNO
 
         for index, row in df.iterrows():
             # INDNO取得（cluster_1_2_t）
@@ -873,10 +1122,29 @@ async def process_dataframe_data(df, api_base_url, read_api_key, insert_api_key,
             if original_indno in indno_mapping:
                 send_indno = indno_mapping[original_indno]
                 converted_count += 1
-                logger.info(f"  INDNO変換: {original_indno} → {send_indno}")
 
-            slip_keys.append({"indno": send_indno, "lineno": lineno})
-            valid_rows.append((row, original_indno, send_indno, lineno))
+            # 特定5部品は払出先40の指示へ返却先を差し替える
+            is_special, resolved_indnos = resolve_special_part_targets(send_indno, redirect_index)
+            if is_special:
+                if not resolved_indnos:
+                    special_unresolved.append(send_indno)
+                    skip_count += 1
+                    continue
+                if resolved_indnos != [send_indno]:
+                    redirected_count += 1
+                target_indnos = resolved_indnos
+            else:
+                target_indnos = [send_indno]
+
+            for target_indno in target_indnos:
+                slip_keys.append({"indno": target_indno, "lineno": lineno})
+                valid_rows.append((row, original_indno, target_indno, lineno))
+
+        if special_unresolved:
+            logger.error(
+                f"特定5部品リダイレクト先(払出先40)なし: {len(special_unresolved)}件 - "
+                + ", ".join(special_unresolved)
+            )
 
         if not slip_keys:
             logger.warning("バリデーション通過データが0件です。処理を終了します。")
@@ -885,27 +1153,27 @@ async def process_dataframe_data(df, api_base_url, read_api_key, insert_api_key,
                 'success': success_count,
                 'skip': skip_count,
                 'error': error_count,
-                'blocked': blocked_count
+                'blocked': blocked_count,
+                'converted': converted_count,
+                'redirected': redirected_count
             }
 
         # ステップ2: 指示データを一括取得
-        logger.info("")
         instruction_cache = await get_instructions_batch(
             client, api_base_url, read_api_key, slip_keys
         )
-        logger.info("")
 
         # ステップ3: 送信処理
         completion_url = f"{api_base_url}/completion/"
         valid_count = len(valid_rows)
-        logger.info(f"データ送信を開始します: {valid_count}件\n")
+        missing_instructions = []  # 指示データが見つからなかった (元INDNO, 変換後INDNO, lineno) を集約用に蓄積
 
         for row_number, (row, original_indno, send_indno, lineno) in enumerate(valid_rows, 1):
             key = (send_indno, lineno)  # 変換後のINDNOでキャッシュを検索
 
             # キャッシュから指示データを取得
             if key not in instruction_cache:
-                logger.error(f"  [{row_number}/{valid_count}] ✗ エラー: 指示データ取得失敗 (元INDNO={original_indno}, 変換後INDNO={send_indno}, lineno={lineno})")
+                missing_instructions.append((original_indno, send_indno, lineno))
                 skip_count += 1
                 continue
 
@@ -913,14 +1181,13 @@ async def process_dataframe_data(df, api_base_url, read_api_key, insert_api_key,
 
             # 送信可否判定
             if not is_sendable_status(instruction):
-                logger.info(f"  [{row_number}/{valid_count}] 除外: 送信不可状態（完了/中止/実績登録中） (INDNO={send_indno})")
                 blocked_count += 1
                 continue
 
             # prdqty を取得（THQTY）
             prdqty = instruction.get('THQTY')
             if prdqty is None or pd.isna(prdqty):
-                logger.warning(f"  [{row_number}/{valid_count}] スキップ: THQTY が空 (INDNO={send_indno})")
+                logger.warning(f"THQTY が空: INDNO={send_indno}")
                 skip_count += 1
                 continue
 
@@ -928,7 +1195,7 @@ async def process_dataframe_data(df, api_base_url, read_api_key, insert_api_key,
             try:
                 prdqty_value = float(prdqty)
             except (ValueError, TypeError):
-                logger.warning(f"  [{row_number}/{valid_count}] スキップ: THQTY が数値変換不可 (INDNO={send_indno}, THQTY={prdqty})")
+                logger.warning(f"THQTY が数値変換不可: INDNO={send_indno}, THQTY={prdqty}")
                 skip_count += 1
                 continue
 
@@ -953,13 +1220,22 @@ async def process_dataframe_data(df, api_base_url, read_api_key, insert_api_key,
             else:
                 error_count += 1
 
+        # 指示データが見つからなかった分をまとめて1行でログ出力（ログ肥大化防止のため個別出力はしない）
+        if missing_instructions:
+            detail = ", ".join(
+                f"{o}(lineno={l})" if o == s else f"{o}→{s}(lineno={l})"
+                for o, s, l in missing_instructions
+            )
+            logger.error(f"指示データ取得失敗: {len(missing_instructions)}件 - {detail}")
+
     return {
         'total': total_rows,
         'success': success_count,
         'skip': skip_count,
         'error': error_count,
         'blocked': blocked_count,
-        'converted': converted_count  # INDNO変換件数
+        'converted': converted_count,  # INDNO変換件数
+        'redirected': redirected_count  # 特定5部品リダイレクト件数
     }
 
 
@@ -986,7 +1262,7 @@ async def process_dataframe_data_pattern3(df, api_base_url, read_api_key, insert
     )
 
 
-async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key, indno_column, date_column, iptancd, table_name='unknown', seino_column=None, ktcd_column=None, indno_mapping=None):
+async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key, indno_column, date_column, iptancd, table_name='unknown', seino_column=None, ktcd_column=None, indno_mapping=None, resolve_mode='', hmcd_column=None):
     """
     DataFrameデータを処理してAPIに送信（汎用パターン3: 全LINENO送信）
 
@@ -1002,6 +1278,8 @@ async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key,
         seino_column (str): SEINOカラム名（indno_column="FROM_API"の場合に使用）
         ktcd_column (str): KTCDカラム名（indno_column="FROM_API"の場合に使用）
         indno_mapping (dict): {lot_number: indno} マッピング辞書（省略可）
+        resolve_mode (str): 'seino_hmcd' の場合、SEINO+HMCD（払出先40）で返却先INDNOを解決する
+        hmcd_column (str): HMCDカラム名（resolve_mode='seino_hmcd' の場合に使用。seino_column はSEINO末尾）
 
     Returns:
         dict: 処理結果サマリー
@@ -1014,17 +1292,10 @@ async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key,
     error_count = 0
     blocked_count = 0
     converted_count = 0  # INDNO変換カウント
-
-    logger.info(f"データ処理を開始します（パターン3: {table_name}）: 全{total_rows}件\n")
-    if indno_mapping:
-        logger.info(f"INDNOマッピング: {len(indno_mapping)}件のマッピング適用可能\n")
+    redirected_count = 0  # 特定5部品のリダイレクトカウント
 
     # 日本時間の今日の日付（YYYY-MM-DD形式）
     kteddt = datetime.now(JST).strftime('%Y-%m-%d')
-    logger.info(f"KTEDDT（日本時間システム日付）: {kteddt}\n")
-    logger.info(f"IPTANCD: {iptancd}\n")
-    logger.info(f"INDNOカラム: {indno_column}\n")
-    logger.info(f"日付カラム: {date_column}\n")
 
     async with httpx.AsyncClient() as client:
         # ステップ1: 対象月のリストを作成
@@ -1065,26 +1336,24 @@ async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key,
                         target_months.add((year, month))
 
         if not target_months:
-            logger.warning("対象月が見つかりません。処理を終了します。")
+            logger.warning(f"対象月が見つかりません ({table_name})。処理を終了します。")
             return {
                 'total': total_rows,
                 'success': success_count,
                 'skip': skip_count,
                 'error': error_count,
                 'blocked': blocked_count,
-                'converted': converted_count
+                'converted': converted_count,
+                'redirected': redirected_count
             }
 
         target_months = sorted(target_months)
-        logger.info(f"対象月: {', '.join([f'{y}年{m}月' for y, m in target_months])}\n")
 
         # ステップ2: 各月の指示データを取得してキャッシュ
         all_instructions = []
         for year, month in target_months:
             instructions = await get_instructions_by_month(client, api_base_url, read_api_key, year, month)
             all_instructions.extend(instructions)
-
-        logger.info(f"\n全月次データ取得完了: 合計{len(all_instructions)}件\n")
 
         # INDNOをキーとした辞書を作成（全LINENOを含む）
         # {INDNO: [{instruction1}, {instruction2}, ...]}
@@ -1096,19 +1365,28 @@ async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key,
                     indno_instructions[indno] = []
                 indno_instructions[indno].append(instruction)
 
-        logger.info(f"指示データINDNO数: {len(indno_instructions)}件\n")
+        # 特定5部品のリダイレクト用インデックス（月次データから構築＝追加のAPI呼び出しは不要）
+        redirect_index = build_special_part_redirect_index(all_instructions)
+
+        # SEINO+HMCD解決用インデックス（払出先40。月次データから構築）
+        use_seino_hmcd = resolve_mode == RESOLVE_MODE_SEINO_HMCD
+        seino_hmcd_index = build_seino_hmcd_index(all_instructions) if use_seino_hmcd else {}
+        current_yy = datetime.now(JST).year % 100
+        resolved_targets = set()  # 解決済みの返却先INDNO（複数行が同じINDNOに解決される場合の二重送信防止）
+        resolve_failures = {}  # {理由: [ラベル, ...]} をログ集約用に蓄積
 
         # ステップ3: 送信処理
         completion_url = f"{api_base_url}/completion/"
-        logger.info(f"データ送信を開始します: {total_rows}件のINDNO\n")
 
         processed_count = 0
+        missing_instructions = []  # 指示データが見つからなかった (元INDNO, 変換後INDNO) を集約用に蓄積
+        special_unresolved = []  # 特定5部品だが払出先40の指示が見つからなかったINDNO
         for row_number, (index, row) in enumerate(df.iterrows(), 1):
             # INDNO取得（指定されたカラムから、またはAPI経由）
             if indno_column == "FROM_API":
                 # SEINOとKTCDからAPI経由でINDNOを取得
                 if not seino_column or not ktcd_column:
-                    logger.error(f"  [{row_number}/{total_rows}] スキップ: seino_columnまたはktcd_columnが指定されていません")
+                    logger.error(f"seino_columnまたはktcd_columnが指定されていません ({table_name})")
                     skip_count += 1
                     continue
 
@@ -1118,7 +1396,7 @@ async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key,
                 if ktcd_column in df.columns:
                     ktcd = str(row.get(ktcd_column, '')).strip()
                     if not ktcd or pd.isna(row.get(ktcd_column)):
-                        logger.warning(f"  [{row_number}/{total_rows}] スキップ: KTCDが空 ({ktcd_column})")
+                        logger.warning(f"KTCDが空 ({ktcd_column}) [{row_number}/{total_rows}]")
                         skip_count += 1
                         continue
                 else:
@@ -1126,23 +1404,22 @@ async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key,
                     ktcd = ktcd_column.strip()
 
                 if not seino or pd.isna(row.get(seino_column)):
-                    logger.warning(f"  [{row_number}/{total_rows}] スキップ: SEINOが空 ({seino_column})")
+                    logger.warning(f"SEINOが空 ({seino_column}) [{row_number}/{total_rows}]")
                     skip_count += 1
                     continue
 
                 # API経由でINDNOを取得
                 original_indno = await fetch_indno_from_api(seino, ktcd, api_base_url, read_api_key)
                 if not original_indno:
-                    logger.error(f"  [{row_number}/{total_rows}] ✗ エラー: INDNO取得失敗 (SEINO={seino}, KTCD={ktcd})")
+                    logger.error(f"INDNO取得失敗: SEINO={seino}, KTCD={ktcd} [{row_number}/{total_rows}]")
                     error_count += 1
                     continue
 
-                logger.info(f"  [{row_number}/{total_rows}] API経由でINDNO取得: SEINO={seino}, KTCD={ktcd} → INDNO={original_indno}")
             else:
                 # 指定カラムから直接INDNO取得
                 original_indno = str(row.get(indno_column, '')).strip()
                 if not original_indno or pd.isna(row.get(indno_column)):
-                    logger.warning(f"  [{row_number}/{total_rows}] スキップ: INDNOが空 ({indno_column})")
+                    logger.warning(f"INDNOが空 ({indno_column}) [{row_number}/{total_rows}]")
                     skip_count += 1
                     continue
 
@@ -1152,63 +1429,117 @@ async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key,
             if original_indno in indno_mapping:
                 send_indno = indno_mapping[original_indno]
                 converted_count += 1
-                logger.info(f"  [{row_number}/{total_rows}] INDNO変換: {original_indno} → {send_indno}")
 
-            # 該当INDNOの指示データを取得（変換後のINDNOで検索）
-            if send_indno not in indno_instructions:
-                logger.error(f"  [{row_number}/{total_rows}] ✗ エラー: 指示データ取得失敗 (元INDNO={original_indno}, 変換後INDNO={send_indno})")
-                skip_count += 1
-                continue
-
-            # 全LINENOに対して送信
-            instructions_for_indno = indno_instructions[send_indno]
-            logger.info(f"  [{row_number}/{total_rows}] INDNO={send_indno}: {len(instructions_for_indno)}件のLINENOを処理")
-
-            for instruction in instructions_for_indno:
-                lineno = instruction.get('LINENO', 0)
-                processed_count += 1
-
-                # 送信可否判定
-                if not is_sendable_status(instruction):
-                    logger.info(f"    └ LINENO={lineno}: 除外（送信不可状態）")
-                    blocked_count += 1
-                    continue
-
-                # prdqty を取得（THQTY）
-                prdqty = instruction.get('THQTY')
-                if prdqty is None or pd.isna(prdqty):
-                    logger.warning(f"    └ LINENO={lineno}: スキップ（THQTYが空）")
-                    skip_count += 1
-                    continue
-
-                # float型に変換
-                try:
-                    prdqty_value = float(prdqty)
-                except (ValueError, TypeError):
-                    logger.warning(f"    └ LINENO={lineno}: スキップ（THQTY数値変換不可: {prdqty}）")
-                    skip_count += 1
-                    continue
-
-                # ペイロード作成（send_indnoは既に変換済み）
-                payload = {
-                    "KTEDDT": kteddt,
-                    "INDNO": send_indno,  # 変換後のINDNOを使用
-                    "lineno": lineno,
-                    "IPTANCD": iptancd,
-                    "prdqty": prdqty_value,
-                    "ktedqty": prdqty_value
-                }
-
-                # API送信
-                row_info = f"{row_number}/{total_rows}, LINENO={lineno}"
-                success, message = await send_completion_record(
-                    client, completion_url, insert_api_key, payload, row_info
+            if use_seino_hmcd:
+                # SEINO+HMCD（払出先40）で現行INDNOを解決（特定5部品リダイレクトは不要）
+                reason, target_indnos = resolve_targets_by_seino_hmcd(
+                    send_indno, row, seino_column, hmcd_column,
+                    indno_instructions, seino_hmcd_index, current_yy
                 )
-
-                if success:
-                    success_count += 1
+                if reason:
+                    label = f"{send_indno}({get_cell_text(row, seino_column)}/{get_cell_text(row, hmcd_column)})"
+                    resolve_failures.setdefault(reason, []).append(label)
+                    skip_count += 1
+                    continue
+                target_indnos = [t for t in target_indnos if t not in resolved_targets]
+                resolved_targets.update(target_indnos)
+                if not target_indnos:
+                    continue  # 他の行で解決済み（二重送信しない）
+            else:
+                # 特定5部品は払出先40の指示へ返却先を差し替える
+                is_special, resolved_indnos = resolve_special_part_targets(send_indno, redirect_index)
+                if is_special:
+                    if not resolved_indnos:
+                        special_unresolved.append(send_indno)
+                        skip_count += 1
+                        continue
+                    if resolved_indnos != [send_indno]:
+                        redirected_count += 1
+                    target_indnos = resolved_indnos
                 else:
-                    error_count += 1
+                    target_indnos = [send_indno]
+
+            for target_indno in target_indnos:
+                # 該当INDNOの指示データを取得（変換・リダイレクト後のINDNOで検索）
+                if target_indno not in indno_instructions:
+                    missing_instructions.append((original_indno, target_indno))
+                    skip_count += 1
+                    continue
+
+                # 全LINENOに対して送信
+                instructions_for_indno = indno_instructions[target_indno]
+
+                for instruction in instructions_for_indno:
+                    lineno = instruction.get('LINENO', 0)
+                    processed_count += 1
+
+                    # 送信可否判定
+                    if not is_sendable_status(instruction):
+                        blocked_count += 1
+                        continue
+
+                    # prdqty を取得（THQTY）
+                    prdqty = instruction.get('THQTY')
+                    if prdqty is None or pd.isna(prdqty):
+                        logger.warning(f"THQTYが空: INDNO={target_indno}, LINENO={lineno}")
+                        skip_count += 1
+                        continue
+
+                    # float型に変換
+                    try:
+                        prdqty_value = float(prdqty)
+                    except (ValueError, TypeError):
+                        logger.warning(f"THQTY数値変換不可: INDNO={target_indno}, LINENO={lineno}, THQTY={prdqty}")
+                        skip_count += 1
+                        continue
+
+                    # ペイロード作成（target_indnoは変換・リダイレクト適用済み）
+                    payload = {
+                        "KTEDDT": kteddt,
+                        "INDNO": target_indno,
+                        "lineno": lineno,
+                        "IPTANCD": iptancd,
+                        "prdqty": prdqty_value,
+                        "ktedqty": prdqty_value
+                    }
+
+                    # API送信
+                    row_info = f"{row_number}/{total_rows}, LINENO={lineno}"
+                    success, message = await send_completion_record(
+                        client, completion_url, insert_api_key, payload, row_info
+                    )
+
+                    if success:
+                        success_count += 1
+                    else:
+                        error_count += 1
+
+        # 指示データが見つからなかった分をまとめて1行でログ出力（ログ肥大化防止のため個別出力はしない）
+        if missing_instructions:
+            detail = ", ".join(
+                o if o == s else f"{o}→{s}"
+                for o, s in missing_instructions
+            )
+            logger.error(f"指示データ取得失敗: {len(missing_instructions)}件 ({table_name}) - {detail}")
+
+        # 特定5部品でリダイレクト先が見つからなかった分をまとめて1行でログ出力
+        if special_unresolved:
+            logger.error(
+                f"特定5部品リダイレクト先(払出先40)なし: {len(special_unresolved)}件 ({table_name}) - "
+                + ", ".join(special_unresolved)
+            )
+
+        # SEINO+HMCDで解決できなかった分を理由別に1行ずつログ出力
+        resolve_failure_messages = (
+            ('no_key', logger.error, 'SEINO・HMCD取得不可'),
+            ('not_found', logger.error, '払出先40のSEINO+HMCD該当なし'),
+            ('ambiguous', logger.error, 'SEINO末尾一致が複数（特定不可）'),
+            ('past_year', logger.warning, '前年以前の製番のため対象外'),
+        )
+        for reason, log, message in resolve_failure_messages:
+            labels = resolve_failures.get(reason)
+            if labels:
+                log(f"{message}: {len(labels)}件 ({table_name}) - " + ", ".join(labels))
 
     return {
         'total': total_rows,
@@ -1216,15 +1547,14 @@ async def process_pattern3_table(df, api_base_url, read_api_key, insert_api_key,
         'skip': skip_count,
         'error': error_count,
         'blocked': blocked_count,
-        'converted': converted_count  # INDNO変換件数
+        'converted': converted_count,  # INDNO変換件数
+        'redirected': redirected_count  # 特定5部品リダイレクト件数
     }
 
 
 async def main_async():
     """メイン処理（非同期）"""
-    logger.info("=" * 60)
-    logger.info("機械データ取得 → FastAPI 送信 統合処理を開始")
-    logger.info("=" * 60)
+    logger.info("処理開始")
 
     # 古いログファイルのクリーンアップ
     cleanup_old_logs(LOG_DIR, LOG_RETENTION_DAYS)
@@ -1238,9 +1568,6 @@ async def main_async():
         logger.error("INSERT_API_KEY が設定されていません")
         return 1
 
-    logger.info(f"API送信先: {FASTAPI_BASE_URL}")
-    logger.info(f"CSV出力モード: {'有効' if ENABLE_CSV_OUTPUT else '無効（デバッグ用）'}\n")
-
     # INDNOマッピング辞書を読み込み
     indno_mapping = load_indno_mapping()
 
@@ -1250,59 +1577,35 @@ async def main_async():
         logger.error("データ取得に失敗したか、データが空です")
         return 1
 
-    logger.info("")
-    logger.info("=" * 60)
-    logger.info("FastAPI 送信処理を開始")
-    logger.info("=" * 60)
-
     # top_remarks3 で当月・翌月・翌々月のデータをフィルタリング
     df_filtered = filter_by_top_remarks3(df)
     if df_filtered.empty:
         logger.warning("top_remarks3フィルタリング後のデータが0件です。処理を終了します。")
         return 0
 
-    # ==================== パターン1処理 ====================
-    logger.info("")
-    logger.info("=" * 60)
-    logger.info("【パターン1】cluster_1_24_n～cluster_1_636_n のフラグチェック処理")
-    logger.info("=" * 60)
+    # ========== 時限処理：202603以降除外（不要になったら下記1行をコメントアウト） ==========
+    # df_filtered = filter_out_202603_and_later(df_filtered, 'top_remarks3')
+    # ========== 時限処理ここまで ==========
+    if df_filtered.empty:
+        logger.warning("202603以降除外フィルタリング後のデータが0件です。処理を終了します。")
+        return 0
 
-    # cluster_1_24_n～cluster_1_636_n のいずれかが 1.0 の行を抽出
+    # ==================== パターン1処理 ====================
     df_pattern1 = filter_by_cluster_flags(df_filtered)
 
-    result_pattern1 = {'total': 0, 'success': 0, 'skip': 0, 'error': 0, 'blocked': 0, 'converted': 0}
+    result_pattern1 = {'total': 0, 'success': 0, 'skip': 0, 'error': 0, 'blocked': 0, 'converted': 0, 'redirected': 0}
     if not df_pattern1.empty:
-        # データを処理してAPI送信（パターン1）
         result_pattern1 = await process_dataframe_data(df_pattern1, FASTAPI_BASE_URL, READ_API_KEY, INSERT_API_KEY, indno_mapping)
-
-        # パターン1処理結果サマリー
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info("【パターン1】処理完了")
-        logger.info(f"総件数: {result_pattern1['total']}件")
-        logger.info(f"成功: {result_pattern1['success']}件")
-        logger.info(f"INDNO変換: {result_pattern1['converted']}件")
-        logger.info(f"スキップ（バリデーションエラー・指示データ取得失敗）: {result_pattern1['skip']}件")
-        logger.info(f"除外（送信不可状態）: {result_pattern1['blocked']}件")
-        logger.info(f"エラー（送信失敗）: {result_pattern1['error']}件")
-        logger.info("=" * 60)
     else:
-        logger.warning("【パターン1】clusterフラグフィルタリング後のデータが0件です。パターン1をスキップします。")
+        logger.warning("パターン1: clusterフラグフィルタリング後のデータが0件です。スキップします。")
 
     # ==================== パターン3処理（設定ベース複数テーブル対応） ====================
-    logger.info("")
-    logger.info("=" * 60)
-    logger.info("【パターン3】設定ベース複数テーブル処理")
-    logger.info("=" * 60)
-
-    # .envから設定を読み込み
     pattern3_configs = load_pattern3_configs()
 
     if not pattern3_configs:
-        logger.warning("【パターン3】設定が見つかりません。パターン3をスキップします。")
+        logger.warning("パターン3: 設定が見つかりません。スキップします。")
         result_pattern3_list = []
     else:
-        logger.info(f"パターン3対象テーブル数: {len(pattern3_configs)}件\n")
         result_pattern3_list = []
 
         # 各テーブル設定に対してループ処理
@@ -1316,30 +1619,25 @@ async def main_async():
             date_col = config['date_col']
             iptancd = config['iptancd']
 
-            logger.info("")
-            logger.info("-" * 60)
-            logger.info(f"【パターン3-{idx}】テーブル: {table_name}")
-            logger.info(f"  ソーステーブル: {source_table}")
-            logger.info(f"  INDNOカラム: {indno_col}")
-            if indno_col == "FROM_API":
-                logger.info(f"  SEINOカラム: {seino_col}")
-                logger.info(f"  KTCDカラム: {ktcd_col}")
-            logger.info(f"  判定カラム: {judge_col}")
-            logger.info(f"  日付カラム: {date_col}")
-            logger.info(f"  IPTANCD: {iptancd}")
-            logger.info("-" * 60)
-
             # ソーステーブルからデータを取得
             df_source = fetch_data_from_table(source_table)
             if df_source is None or df_source.empty:
-                logger.error(f"【パターン3-{idx}】{source_table} からのデータ取得に失敗しました。このテーブルをスキップします。")
+                logger.error(f"パターン3-{idx}: {source_table} からのデータ取得失敗。スキップします。")
                 result_pattern3_list.append({'total': 0, 'success': 0, 'skip': 0, 'error': 0, 'blocked': 0, 'converted': 0})
                 continue
 
             # 日付カラムで当月・翌月・翌々月のデータをフィルタリング
             df_date_filtered = filter_by_date_column(df_source, date_col, f"{source_table}.{date_col}")
             if df_date_filtered.empty:
-                logger.warning(f"【パターン3-{idx}】日付フィルタリング後のデータが0件です。このテーブルをスキップします。")
+                logger.warning(f"パターン3-{idx}: {source_table} 日付フィルタリング後0件。スキップします。")
+                result_pattern3_list.append({'total': 0, 'success': 0, 'skip': 0, 'error': 0, 'blocked': 0, 'converted': 0})
+                continue
+
+            # ========== 時限処理：202603以降除外（不要になったら下記1行をコメントアウト） ==========
+            # df_date_filtered = filter_out_202603_and_later(df_date_filtered, date_col.split(',')[0] if ',' in date_col else date_col, f"{source_table}.{date_col}")
+            # ========== 時限処理ここまで ==========
+            if df_date_filtered.empty:
+                logger.warning(f"パターン3-{idx}: {source_table} 202603以降除外後0件。スキップします。")
                 result_pattern3_list.append({'total': 0, 'success': 0, 'skip': 0, 'error': 0, 'blocked': 0, 'converted': 0})
                 continue
 
@@ -1347,7 +1645,7 @@ async def main_async():
             df_pattern3_table = filter_by_judge_column(df_date_filtered, judge_col, f"{source_table}.{judge_col}")
 
             if df_pattern3_table.empty:
-                logger.warning(f"【パターン3-{idx}】フィルタリング後のデータが0件です。このテーブルをスキップします。")
+                logger.warning(f"パターン3-{idx}: {source_table} 判定フィルタリング後0件。スキップします。")
                 result_pattern3_list.append({'total': 0, 'success': 0, 'skip': 0, 'error': 0, 'blocked': 0, 'converted': 0})
                 continue
 
@@ -1363,47 +1661,23 @@ async def main_async():
                 table_name=table_name,
                 seino_column=seino_col,
                 ktcd_column=ktcd_col,
-                indno_mapping=indno_mapping
+                indno_mapping=indno_mapping,
+                resolve_mode=config['mode'],
+                hmcd_column=config['hmcd_col']
             )
             result_pattern3_list.append(result)
 
-            # このテーブルの処理結果サマリー
-            logger.info("")
-            logger.info(f"【パターン3-{idx}】{table_name} 処理完了")
-            logger.info(f"総件数: {result['total']}件")
-            logger.info(f"成功: {result['success']}件")
-            logger.info(f"INDNO変換: {result['converted']}件")
-            logger.info(f"スキップ（バリデーションエラー・指示データ取得失敗）: {result['skip']}件")
-            logger.info(f"除外（送信不可状態）: {result['blocked']}件")
-            logger.info(f"エラー（送信失敗）: {result['error']}件")
-
-    # パターン3全体のサマリー
-    if result_pattern3_list:
-        pattern3_total_success = sum(r['success'] for r in result_pattern3_list)
-        pattern3_total_error = sum(r['error'] for r in result_pattern3_list)
-        pattern3_total_converted = sum(r['converted'] for r in result_pattern3_list)
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info("【パターン3】全テーブル処理完了")
-        logger.info(f"合計成功: {pattern3_total_success}件")
-        logger.info(f"合計INDNO変換: {pattern3_total_converted}件")
-        logger.info(f"合計エラー: {pattern3_total_error}件")
-        logger.info("=" * 60)
-    else:
-        pattern3_total_success = 0
-        pattern3_total_error = 0
-        pattern3_total_converted = 0
-
     # ==================== 全体サマリー ====================
-    total_converted = result_pattern1['converted'] + pattern3_total_converted
-    logger.info("")
-    logger.info("=" * 60)
-    logger.info("全処理完了")
-    logger.info("=" * 60)
-    logger.info(f"【パターン1】成功: {result_pattern1['success']}件 / INDNO変換: {result_pattern1['converted']}件 / エラー: {result_pattern1['error']}件")
-    logger.info(f"【パターン3】成功: {pattern3_total_success}件 / INDNO変換: {pattern3_total_converted}件 / エラー: {pattern3_total_error}件")
-    logger.info(f"【合計】成功: {result_pattern1['success'] + pattern3_total_success}件 / INDNO変換: {total_converted}件 / エラー: {result_pattern1['error'] + pattern3_total_error}件")
-    logger.info("=" * 60)
+    pattern3_total_success = sum(r['success'] for r in result_pattern3_list) if result_pattern3_list else 0
+    pattern3_total_error = sum(r['error'] for r in result_pattern3_list) if result_pattern3_list else 0
+    pattern3_total_converted = sum(r['converted'] for r in result_pattern3_list) if result_pattern3_list else 0
+    pattern3_total_redirected = sum(r.get('redirected', 0) for r in result_pattern3_list) if result_pattern3_list else 0
+
+    logger.info(
+        f"完了: P1成功={result_pattern1['success']}件/エラー={result_pattern1['error']}件, "
+        f"P3成功={pattern3_total_success}件/エラー={pattern3_total_error}件, "
+        f"特定5部品リダイレクト=P1:{result_pattern1.get('redirected', 0)}件/P3:{pattern3_total_redirected}件"
+    )
 
     total_errors = result_pattern1['error'] + pattern3_total_error
     return 0 if total_errors == 0 else 1
