@@ -15,6 +15,9 @@ RUN apt-get update && \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# CVE-2026-111497 (Brotli/HTTP2Shell) 対策: ベースイメージ同梱の libbrotli1 を修正版へ更新
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libbrotli1 && rm -rf /var/lib/apt/lists/*
+
 # タイムゾーンを日本時間に設定
 ENV TZ=Asia/Tokyo
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
