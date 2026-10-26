@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | もの | コマンド | 備考 |
 |---|---|---|
-| 画面（Streamlit） | `Genpin_Start.bat`（`streamlit run 1_現品票発行.py --server.port 8502`） | ページ: 1 現品票発行 / 2 手入力発行 / 3 チェックシート再作成 / 90 操作マニュアル / 95 管理画面 |
+| 画面（Streamlit） | `Genpin_Start.bat`（`streamlit run 1_現品票発行.py --server.port 8502`） | ページ: 1 現品票発行 / 2 手入力発行 / 3 チェックシート再作成 / 4 i-Reporter チェック登録（check_input へのリンクだけ） / 90 操作マニュアル / 95 管理画面 |
 | チェック項目入力（NiceGUI） | `Check_input_start.bat`（port 8506・専用 venv） | 詳細は `check_input/CLAUDE.md` |
 | 夜間処理 | `python create_report.py`（データ更新＋i-Reporter 帳票作成）／ `python dbupdate.py`（データ更新だけ） | タスクスケジューラから。**ファイル名を変えない** |
 | テスト | `python -m unittest discover tests` | 外にはつながない（全部モック） |
