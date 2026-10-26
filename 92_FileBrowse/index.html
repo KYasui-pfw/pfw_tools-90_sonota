@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__SHARE_NAME__</title>
+<style>
+  :root { --head:__SHARE_COLOR__; --bg:#f3f5f8; --line:#dfe3e8; --danger:#c0392b; --accent:#2e6fdb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"Meiryo","Hiragino Sans",sans-serif; background:var(--bg); color:#222; }
+  header { background:var(--head); color:#fff; padding:14px 20px; font-size:18px; }
+  main { max-width:960px; margin:20px auto; padding:0 16px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+  #drop { border:2px dashed #aab4c3; border-radius:8px; padding:24px; text-align:center; color:#667; cursor:pointer; }
+  #drop.over { background:#eaf1fd; border-color:var(--accent); }
+  .toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; flex-wrap:wrap; }
+  .crumbs { font-size:15px; word-break:break-all; }
+  .crumbs a { color:var(--accent); text-decoration:none; cursor:pointer; }
+  .crumbs a:hover { text-decoration:underline; }
+  .crumbs .sep { color:#99a; margin:0 6px; }
+  .crumbs .cur { font-weight:bold; }
+  #bulk { display:flex; align-items:center; gap:8px; background:#fffbe6; border:1px solid #f1e3a6; border-radius:6px; padding:6px 10px; margin-bottom:8px; }
+  #bulk[hidden] { display:none; }
+  #bulk .count { margin-right:auto; font-size:14px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; }
+  th { font-size:13px; color:#667; }
+  th.chk, td.chk { width:34px; padding-right:0; }
+  th.chk input, td.chk input { width:16px; height:16px; cursor:pointer; }
+  tr.sel { background:#f3f7ff; }
+  th.sortable { cursor:pointer; user-select:none; }
+  th.sortable:hover { color:var(--accent); }
+  th.sortable::after { content:" ↕"; color:#bbc; }
+  th[aria-sort="ascending"]::after { content:" ▲"; color:var(--accent); }
+  th[aria-sort="descending"]::after { content:" ▼"; color:var(--accent); }
+  td.num, th.num { text-align:right; white-space:nowrap; }
+  td.name { word-break:break-all; }
+  td.name a { color:inherit; text-decoration:none; font-weight:bold; }
+  td.name a:hover { color:var(--accent); text-decoration:underline; }
+  button { font:inherit; padding:5px 12px; border:1px solid var(--line); border-radius:5px; background:#fff; cursor:pointer; }
+  button.del { color:var(--danger); border-color:var(--danger); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button:hover:not(:disabled) { background:#f0f3f7; }
+  button.primary:hover:not(:disabled) { background:#2459b3; }
+  a.dl { color:var(--accent); text-decoration:none; margin-right:8px; }
+  #msg { min-height:1.4em; margin:8px 0 0; font-size:14px; }
+  #msg.err { color:var(--danger); }
+  .bar { height:6px; background:var(--line); border-radius:3px; margin-top:6px; overflow:hidden; }
+  .bar > i { display:block; height:100%; width:0; background:var(--accent); }
+  .empty { color:#889; padding:16px; text-align:center; }
+  dialog { border:1px solid var(--line); border-radius:10px; padding:20px; width:min(480px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.35); }
+  dialog h3 { margin:0 0 12px; font-size:16px; }
+  #plist { list-style:none; margin:12px 0; padding:0; max-height:280px; overflow:auto; border:1px solid var(--line); border-radius:6px; }
+  #plist li { padding:8px 12px; border-bottom:1px solid var(--line); cursor:pointer; word-break:break-all; }
+  #plist li:last-child { border-bottom:0; }
+  #plist li:hover { background:#f0f3f7; }
+  #plist li.none { color:#889; cursor:default; }
+  #plist li.none:hover { background:none; }
+  .dlgbtn { display:flex; justify-content:flex-end; gap:8px; }
+</style>
+</head>
+<body>
+<header>__SHARE_NAME__</header>
+<main>
+  <div class="card">
+    <div id="drop">ここにファイルをドロップ、またはクリックして選択（複数可）</div>
+    <input id="picker" type="file" multiple hidden>
+    <div id="progress"></div>
+    <p id="msg"></p>
+  </div>
+  <div class="card">
+    <div class="toolbar">
+      <div id="crumbs" class="crumbs"></div>
+      <button id="mkdir">フォルダ作成</button>
+    </div>
+    <div id="bulk" hidden>
+      <span class="count" id="selcount"></span>
+      <button id="bmove">移動</button>
+      <button id="bdel" class="del">削除</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th class="chk"><input type="checkbox" id="all" aria-label="すべて選択"></th>
+        <th class="sortable" data-key="name">名前</th>
+        <th class="sortable num" data-key="size">サイズ</th>
+        <th class="sortable num" data-key="modified">更新日時</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="list"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden>ファイルがありません</div>
+  </div>
+</main>
+
+<dialog id="movedlg">
+  <h3>移動先のフォルダを選択</h3>
+  <div id="pcrumbs" class="crumbs"></div>
+  <ul id="plist"></ul>
+  <div class="dlgbtn">
+    <button id="pcancel">キャンセル</button>
+    <button id="pok" class="primary">ここに移動</button>
+  </div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// 今開いているフォルダ（"a/b" 形式。ルートは空文字）。URLの # に持たせ、再読み込み・戻るボタンでも保たれる
+let cwd = "";
+const readHash = () => location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent).join("/");
+const hashOf = (path) => "#/" + path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+const join = (dir, name) => (dir ? dir + "/" : "") + name;
+
+const SHARE_NAME = "__SHARE_NAME__";  // サーバーが共有の名前に置き換えて返す
+
+// 公開パス（/PCOM/ など）に依存しないよう相対パスで呼ぶ。そのためURLは末尾スラッシュ付きで開く
+const q = (obj) => "?" + new URLSearchParams(obj).toString();
+const apiList = (path) => "api/files" + q({ path });
+const apiDownload = (path) => "api/download" + q({ path });
+const postJson = (url, body) =>
+  fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+function setMsg(text, isErr) {
+  $("msg").textContent = text;
+  $("msg").className = isErr ? "err" : "";
+}
+function fmtSize(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 ** 2) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 ** 3) return (n / 1024 ** 2).toFixed(1) + " MB";
+  return (n / 1024 ** 3).toFixed(2) + " GB";
+}
+function fmtDate(sec) {
+  const d = new Date(sec * 1000), p = (x) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function errText(res) {
+  try { return (await res.json()).detail || res.statusText; } catch { return res.statusText; }
+}
+// 一括操作の結果（{done, errors}）を画面に出す。失敗があれば理由を最大3件まで
+function showResult(verb, r) {
+  const errs = r.errors || [];
+  if (!errs.length) return setMsg(`${r.done} 件を${verb}しました`);
+  const why = errs.slice(0, 3).map((e) => `「${e.path.split("/").pop()}」${e.detail}`).join(" / ");
+  setMsg(`${r.done} 件を${verb}しました。${errs.length} 件は${verb}できませんでした: ${why}${errs.length > 3 ? " …" : ""}`, true);
+}
+
+let items = [];
+let selected = new Set();  // 今のフォルダで選択中の名前
+let sortKey = "name", sortDir = 1;  // 1=昇順 / -1=降順
+
+// フォルダは常にファイルより上。フォルダにはサイズが無いので、サイズ順のときはフォルダ同士は名前順
+function sorted() {
+  const byName = (a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" });
+  const cmp = sortKey === "name" ? byName : (a, b) => (a[sortKey] ?? 0) - (b[sortKey] ?? 0);
+  return [...items].sort((a, b) => {
+    if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+    if (a.type === "dir" && sortKey === "size") return byName(a, b);
+    return cmp(a, b) * sortDir;
+  });
+}
+
+// パンくず。clickable=true のとき、各階層を onGo(path) で辿れる
+function renderCrumbs(box, path, onGo) {
+  box.replaceChildren();
+  const parts = path.split("/").filter(Boolean);
+  const add = (label, to, isCur) => {
+    if (box.childNodes.length) {
+      const s = document.createElement("span");
+      s.className = "sep"; s.textContent = "›";
+      box.append(s);
+    }
+    const el = document.createElement(isCur ? "span" : "a");
+    el.textContent = label;
+    if (isCur) el.className = "cur";
+    else onGo(el, to);
+    box.append(el);
+  };
+  add(SHARE_NAME, "", parts.length === 0);
+  parts.forEach((p, i) => add(p, parts.slice(0, i + 1).join("/"), i === parts.length - 1));
+}
+
+async function load() {
+  const res = await fetch(apiList(cwd));
+  if (!res.ok) {
+    setMsg("一覧の取得に失敗しました: " + await errText(res), true);
+    items = [];
+  } else {
+    items = await res.json();
+  }
+  const names = new Set(items.map((i) => i.name));
+  selected = new Set([...selected].filter((n) => names.has(n)));  // 無くなったものは選択から外す
+  render();
+}
+
+function updateBulk() {
+  const n = selected.size;
+  $("bulk").hidden = n === 0;
+  $("selcount").textContent = `${n} 件を選択中`;
+  const all = $("all");
+  all.checked = items.length > 0 && n === items.length;
+  all.indeterminate = n > 0 && n < items.length;
+}
+
+function render() {
+  renderCrumbs($("crumbs"), cwd, (a, to) => { a.href = hashOf(to); });
+  for (const th of document.querySelectorAll("th.sortable")) {
+    th.setAttribute("aria-sort", th.dataset.key === sortKey ? (sortDir === 1 ? "ascending" : "descending") : "none");
+  }
+  const tbody = $("list");
+  tbody.replaceChildren();
+  $("empty").hidden = items.length > 0;
+  for (const f of sorted()) {
+    const isDir = f.type === "dir";
+    const path = join(cwd, f.name);
+    const tr = tbody.insertRow();
+    tr.classList.toggle("sel", selected.has(f.name));
+
+    const chkCell = tr.insertCell();
+    chkCell.className = "chk";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = selected.has(f.name);
+    cb.setAttribute("aria-label", f.name + " を選択");
+    cb.onchange = () => {
+      if (cb.checked) selected.add(f.name); else selected.delete(f.name);
+      tr.classList.toggle("sel", cb.checked);
+      updateBulk();
+    };
+    chkCell.append(cb);
+
+    const nameCell = tr.insertCell();
+    nameCell.className = "name";
+    if (isDir) {
+      const a = document.createElement("a");
+      a.href = hashOf(path); a.textContent = "📁 " + f.name;
+      nameCell.append(a);
+    } else {
+      nameCell.textContent = "📄 " + f.name;
+    }
+    tr.insertCell().textContent = isDir ? "—" : fmtSize(f.size);
+    tr.insertCell().textContent = fmtDate(f.modified);
+    tr.cells[2].className = tr.cells[3].className = "num";
+    const act = tr.insertCell();
+    act.className = "num";
+    const a = document.createElement("a");
+    a.className = "dl"; a.href = apiDownload(path); a.textContent = isDir ? "ZIPでダウンロード" : "ダウンロード";
+    const b = document.createElement("button");
+    b.className = "del"; b.textContent = "削除";
+    b.onclick = () => removeItems([f.name]);
+    act.append(a, b);
+  }
+  updateBulk();
+}
+
+async function removeItems(names) {
+  const list = items.filter((i) => names.includes(i.name));
+  if (!list.length) return;
+  const hasDir = list.some((i) => i.type === "dir");
+  let msg;
+  if (list.length === 1) {
+    msg = hasDir ? `フォルダ「${list[0].name}」を中身ごと削除しますか？` : `「${list[0].name}」を削除しますか？`;
+  } else {
+    msg = `選択した ${list.length} 件を削除しますか？` + (hasDir ? "（フォルダは中身ごと削除されます）" : "");
+  }
+  if (!confirm(msg)) return;
+  const res = await postJson("api/delete", { paths: list.map((i) => join(cwd, i.name)) });
+  if (!res.ok) return setMsg("削除に失敗しました: " + await errText(res), true);
+  showResult("削除", await res.json());
+  load();
+}
+
+async function makeFolder() {
+  const name = (prompt("新しいフォルダの名前") || "").trim();
+  if (!name) return;
+  const res = await fetch("api/folders" + q({ path: cwd, name }), { method: "POST" });
+  if (!res.ok) return setMsg("フォルダの作成に失敗しました: " + await errText(res), true);
+  setMsg(`フォルダ「${name}」を作成しました`);
+  load();
+}
+
+// ---- 移動先フォルダの選択 ----
+let pickPath = "";
+let moving = [];  // 移動するフルパス
+
+async function loadPicker() {
+  renderCrumbs($("pcrumbs"), pickPath, (a, to) => { a.onclick = () => { pickPath = to; loadPicker(); }; });
+  $("pok").disabled = pickPath === cwd;  // 今いるフォルダへは移動にならない
+  const ul = $("plist");
+  ul.replaceChildren();
+  const res = await fetch(apiList(pickPath));
+  const dirs = res.ok ? (await res.json()).filter((i) => i.type === "dir" && !moving.includes(join(pickPath, i.name))) : [];
+  if (!dirs.length) {
+    const li = document.createElement("li");
+    li.className = "none"; li.textContent = res.ok ? "（フォルダがありません）" : "一覧を取得できませんでした";
+    ul.append(li);
+  }
+  for (const d of dirs) {
+    const li = document.createElement("li");
+    li.textContent = "📁 " + d.name;
+    li.onclick = () => { pickPath = join(pickPath, d.name); loadPicker(); };
+    ul.append(li);
+  }
+}
+
+function openMove() {
+  moving = [...selected].map((n) => join(cwd, n));
+  if (!moving.length) return;
+  pickPath = cwd;
+  loadPicker();
+  $("movedlg").showModal();
+}
+
+async function doMove() {
+  const dest = pickPath;
+  $("movedlg").close();
+  const res = await postJson("api/move", { paths: moving, dest });
+  if (!res.ok) return setMsg("移動に失敗しました: " + await errText(res), true);
+  selected.clear();
+  showResult("移動", await res.json());
+  load();
+}
+
+// 進捗表示のため fetch ではなく XHR で送る。アップロード先は、アップロード開始時に開いていたフォルダ
+function sendOne(file, dir, overwrite) {
+  return new Promise((resolve) => {
+    const row = document.createElement("div");
+    row.innerHTML = '<span></span><div class="bar"><i></i></div>';
+    row.firstChild.textContent = file.name;
+    $("progress").append(row);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "api/files" + q(overwrite ? { path: dir, overwrite: "true" } : { path: dir }));
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) row.querySelector("i").style.width = (e.loaded / e.total * 100) + "%";
+    };
+    xhr.onload = () => { row.remove(); resolve({ status: xhr.status, body: xhr.responseText }); };
+    xhr.onerror = () => { row.remove(); resolve({ status: 0, body: "" }); };
+    const fd = new FormData();
+    fd.append("file", file);
+    xhr.send(fd);
+  });
+}
+
+async function upload(files) {
+  setMsg("");
+  const dir = cwd;
+  let ok = 0;
+  for (const file of files) {
+    let r = await sendOne(file, dir, false);
+    if (r.status === 409) {
+      if (!confirm(`「${file.name}」は既に存在します。上書きしますか？`)) continue;
+      r = await sendOne(file, dir, true);
+    }
+    if (r.status === 200) { ok++; continue; }
+    let detail = "通信エラー";
+    try { detail = JSON.parse(r.body).detail || detail; } catch {}
+    setMsg(`「${file.name}」のアップロードに失敗しました: ${detail}`, true);
+    break;
+  }
+  if (ok) setMsg(`${ok} 件アップロードしました`);
+  if (dir === cwd) load();  // アップロード中に別フォルダへ移動していたら、そのままにする
+}
+
+for (const th of document.querySelectorAll("th.sortable")) {
+  th.onclick = () => {
+    // 同じ列なら昇順/降順を反転。別の列に変えたときは、サイズ・更新日時は新しい順/大きい順から
+    if (sortKey === th.dataset.key) sortDir = -sortDir;
+    else { sortKey = th.dataset.key; sortDir = sortKey === "name" ? 1 : -1; }
+    render();
+  };
+}
+
+$("all").onchange = (e) => {
+  selected = e.target.checked ? new Set(items.map((i) => i.name)) : new Set();
+  render();
+};
+$("bdel").onclick = () => removeItems([...selected]);
+$("bmove").onclick = openMove;
+$("pok").onclick = doMove;
+$("pcancel").onclick = () => $("movedlg").close();
+$("mkdir").onclick = makeFolder;
+window.onhashchange = () => { cwd = readHash(); selected.clear(); setMsg(""); load(); };
+
+const drop = $("drop");
+drop.onclick = () => $("picker").click();
+$("picker").onchange = (e) => { upload([...e.target.files]); e.target.value = ""; };
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = (e) => {
+  e.preventDefault();
+  drop.classList.remove("over");
+  // フォルダそのものはアップロードできない（中身のファイルを選んでもらう）
+  const dirs = [...e.dataTransfer.items].filter((i) => i.webkitGetAsEntry?.()?.isDirectory);
+  const files = [...e.dataTransfer.files].filter((_, idx) => !e.dataTransfer.items[idx]?.webkitGetAsEntry?.()?.isDirectory);
+  if (files.length) upload(files);
+  if (dirs.length) setMsg("フォルダはアップロードできません。中のファイルを選んでください", true);
+};
+
+cwd = readHash();
+load();
+</script>
+</body>
+</html>
