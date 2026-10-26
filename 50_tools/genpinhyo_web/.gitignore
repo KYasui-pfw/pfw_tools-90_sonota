@@ -1,0 +1,5 @@
+# check_input（NiceGUI）のログイン状態の保存先
+check_input/.nicegui/
+check_input/venv/
+# i-Reporter に取り込ませた CSV（実行のたびに増える）
+csv/
