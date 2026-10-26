@@ -52,10 +52,26 @@ REPORT_MISSING_MESSAGE = (
 # データ
 # ---------------------------------------------------------------------------
 
-@st.cache_data(show_spinner=False)
-def load_tag_list(month_prefix, data_version):
-    """一覧を読む。data_version はデータ更新・印刷のたびに増やす（増えると読み直す）。"""
+@st.cache_data(show_spinner=False, ttl=600)
+def load_tag_list(month_prefix, data_version, db_stamp):
+    """一覧を読む。引数のどれかが変わると読み直す（同じなら覚えている一覧を返す）。
+
+    data_version … この画面でデータ更新・印刷をしたら増やす
+    db_stamp     … DB ファイルの更新日時（db_stamp() の値）
+    ⚠ st.cache_data の覚えは**全員で共有**される。夜間処理（create_report.py・dbupdate.py）は
+      別のプロセスで DB を書き換えるので、db_stamp を見ないと古い一覧を出し続ける
+      （旧アプリで実際に起きた。2026-10-26、夜間処理で消えた25件が画面に残り、件数が24件ずれていた）。
+    """
     return listing.load_tag_list(month_prefix)
+
+
+def db_stamp():
+    """DB のファイル（WAL の作業ファイルを含む）の更新日時。どこかで書き込まれると変わる。"""
+    stamps = []
+    for suffix in ("", "-wal"):
+        path = config.GENPINHYO_DB.with_name(config.GENPINHYO_DB.name + suffix)
+        stamps.append(path.stat().st_mtime_ns if path.exists() else 0)
+    return tuple(stamps)
 
 
 def refresh_data():
@@ -71,11 +87,10 @@ def run_update(report_month_prefix=None):
     """
     try:
         result = update.run_update()
-        message = (f"データ更新が終わりました（{result.written}件。"
-                   f"削除扱いになったロット {result.deleted_on}件・戻ったロット {result.deleted_off}件）。")
+        # 終わったことは表示しない（利用者の指示 2026-10-26）。部品の設定が要るときだけ知らせる。
         if result.new_parts:
-            message += f"　新しい部品名が {result.new_parts}件ありました。部品の設定をしてください。"
-        st.session_state["update_message"] = ("success", message)
+            st.session_state["update_message"] = (
+                "warning", f"新しい部品名が {result.new_parts}件ありました。部品の設定をしてください。")
     except (portal_api.PortalApiError, rbom.RbomApiError) as error:
         db.log_error(f"データ更新: {error}")
         st.session_state["update_message"] = (
@@ -83,6 +98,10 @@ def run_update(report_month_prefix=None):
             f"業務ポータルまたは rBOM からデータを取得できなかったため、データ更新を中止しました"
             f"（表示は前回更新時のままです）。　{error}",
         )
+        return
+    except db.DatabaseCorruptedError as error:
+        db.log_error(f"データ更新: {error}")
+        st.session_state["update_message"] = ("error", f"{error}　DX推進室に連絡してください。")
         return
     finally:
         refresh_data()
@@ -210,7 +229,7 @@ def update_button(column, month_prefix):
                     unsafe_allow_html=True)
         if "update_message" in st.session_state:
             kind, message = st.session_state.pop("update_message")
-            (st.error if kind == "error" else st.success)(message)
+            (st.error if kind == "error" else st.warning)(message)
 
 
 def filter_rows(df, ji):
@@ -343,7 +362,7 @@ def main():
     month_prefix, ji, update_column = choose_month()
     update_button(update_column, month_prefix)
 
-    df = load_tag_list(month_prefix, st.session_state.get("data_version", 0))
+    df = load_tag_list(month_prefix, st.session_state.get("data_version", 0), db_stamp())
     filtered = filter_rows(df, ji)
     selected = show_grid(filtered)
     print_buttons(selected)

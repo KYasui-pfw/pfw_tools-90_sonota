@@ -5,8 +5,12 @@
     3. そのうち印刷の「履歴」を、1ロット1行の print_history に移す
     4. output_history を消す
     5. excluded_lots を「ロット番号だけ」の形に作り直す
-    6. 索引などを作り、VACUUM で空いた領域を詰める（ファイルが小さくなる）
-    7. WAL モードにする
+    6. DB を点検し、壊れていれば genpinhyo を作り直す（同じロットの行が複数あれば最後に書かれた行を残す）
+    7. 索引などを作り、VACUUM で空いた領域を詰める（ファイルが小さくなる）
+    8. WAL モードにする
+
+⚠ 2026-10-26 に受け取った本番の写しは、genpinhyo のロット番号の索引が壊れていた
+  （行が索引に載っていない）。そのままデータ更新すると同じロットの行が増えていくので、6 で直す。
 
 使い方（⚠ 現品票の画面・夜間処理・i-Reporter 連携を止めてから）:
     python tools/migrate_genpinhyo_db.py --dry-run   … 何が起きるかの件数だけ表示（何も変えない）
@@ -73,6 +77,24 @@ def archive_output_history(conn, stamp):
     return target
 
 
+def duplicate_lots(conn):
+    """同じロット番号の行が複数あるロットの数（索引を使わずに数える）。"""
+    return conn.execute(
+        "SELECT COUNT(*) FROM (SELECT ロット番号 FROM genpinhyo NOT INDEXED"
+        " GROUP BY ロット番号 HAVING COUNT(*) > 1)"
+    ).fetchone()[0]
+
+
+def integrity_report(conn):
+    """点検の結果を1行で返す（--dry-run で表示する用）。"""
+    result = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    duplicates = duplicate_lots(conn)
+    if result == "ok" and not duplicates:
+        return "壊れていません"
+    first = result.splitlines()[0] if result != "ok" else "索引は正常"
+    return f"⚠ 壊れています（{first}／同じロットが複数行あるロット {duplicates:,}件）→ 実行すると作り直します"
+
+
 def rebuild_excluded_lots(conn):
     """excluded_lots を「ロット番号だけ（主キー）」の形に作り直す。"""
     columns = [row[1] for row in conn.execute("PRAGMA table_info(excluded_lots)")]
@@ -106,6 +128,9 @@ def main():
         print_rows = None
         print("  output_history はありません（移行済み）")
 
+    integrity = integrity_report(conn)
+    print(f"  点検: {integrity}")
+
     if args.dry_run:
         print("--dry-run なので何も変えていません。")
         return
@@ -136,11 +161,24 @@ def main():
     db.ensure_schema(conn)
     conn.commit()
 
-    print("6. VACUUM（数分かかることがあります）")
+    if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok" or duplicate_lots(conn):
+        before, after = db.rebuild_genpinhyo(conn)
+        conn.execute("REINDEX")
+        conn.commit()
+        print(f"6. genpinhyo を作り直しました（{before:,}行 → {after:,}行。重なっていたロットは最後に書かれた行を残した）")
+    else:
+        print("6. 点検: 壊れていません")
+    result = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    if result != "ok":
+        conn.close()
+        print(f"⚠ 作り直しても直りませんでした。バックアップ（{backup}）から戻して、DX推進室で調べてください: {result[:200]}")
+        sys.exit(1)
+
+    print("7. VACUUM（数分かかることがあります）")
     conn.execute("VACUUM")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.close()
-    print(f"7. 完了: {path}（{size_mb(path):,.0f}MB）")
+    print(f"8. 完了: {path}（{size_mb(path):,.0f}MB）")
 
 
 if __name__ == "__main__":

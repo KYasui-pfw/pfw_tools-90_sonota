@@ -338,6 +338,7 @@ def run_update():
 
     Raises:
         portal_api.PortalApiError / rbom.RbomApiError: 外から取れなかった（DB は何も変わらない）
+        db.DatabaseCorruptedError: DB が壊れている（DB は何も変わらない）
     """
     # 外から取ってくるものは、DB を開く前に全部そろえる（途中で失敗したら書かずに終わる）。
     slips = portal_api.fetch_denpyo()
@@ -347,9 +348,12 @@ def run_update():
         for row in irepo.fetch_customers().to_dict("records")
     }
 
-    db.backup_genpinhyo()
     conn = db.connect()
     try:
+        # 壊れた DB に書くと同じロットの行が増えていくので、点検してから書く。
+        # バックアップより先に点検する（壊れた写しで、その日のバックアップを上書きしないため）。
+        db.check_integrity(conn)
+        db.backup_genpinhyo()
         db.ensure_schema(conn)
         change_gear_boxes, new_mappings = build_change_gear_boxes(conn, kept)
         all_slips = kept + change_gear_boxes

@@ -51,6 +51,9 @@ genpinhyo（REPLACE）・buhin_irepo_mst（新しい部品名を QRコードレ�
 ```
 - 払出先の除外（時限処理）: 特定5部品（SINKER REST RING / NEEDLE DIAL / NEEDLE CYLINDER / SINKER DIAL / WRAP DIAL）は 40 を捨てて 60 を残す。それ以外は 49・60 を捨てる。PT は捨てない
 - 外から取るもの（API・i-Reporter）は DB を開く前にそろえ、書き込みは1トランザクション。**失敗したら何も書かない**
+- ⚠ 書く前に `PRAGMA quick_check` で点検し、壊れていれば止める（`db.check_integrity`）。ロット番号の索引が壊れていると
+  REPLACE が既存の行を見つけられず、同じロットの行が更新のたびに増える（2026-10-26 に本番の写しで発生）。
+  直すのは `tools/migrate_genpinhyo_db.py`（`db.rebuild_genpinhyo`。⚠ 壊れたテーブルを rowid で引くと行が消えるので、全件を読んで Python で整理する）
 - 画面を開いた最初の1回と「データ更新」ボタンで動く。ボタンのときは、表示中の月の未作成の i-Reporter 帳票も作る
 - ⚠ 加工伝票の「加工部番」は**変換済み**（`478-409TA33`）。A1 `lots/` は変換前の品目CDを受け取る約束なので、加工伝票の部番を送ると二重に変換されて引けない。加工伝票は A4 を使う
 

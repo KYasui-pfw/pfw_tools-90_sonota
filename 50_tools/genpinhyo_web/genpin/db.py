@@ -93,6 +93,78 @@ PRINT_KIND_MANUAL = "手入力"
 PRINT_KIND_REISSUE = "チェックシート再作成"
 
 
+class DatabaseCorruptedError(Exception):
+    """genpinhyo.db が壊れている（索引とテーブルの中身が食い違っている）。"""
+
+
+def check_integrity(conn):
+    """DB が壊れていないか点検する。壊れていれば DatabaseCorruptedError。
+
+    ⚠ ロット番号の索引が壊れていると、REPLACE INTO が既にある行を見つけられず、
+      データ更新のたびに同じロットの行が1行ずつ増えていく（2026-10-26 に本番の写しで発生）。
+      そうならないよう、書き込む前に必ず点検する。quick_check は数十MBなら1秒もかからない。
+    """
+    result = conn.execute("PRAGMA quick_check").fetchone()[0]
+    if result != "ok":
+        raise DatabaseCorruptedError(
+            "genpinhyo.db が壊れているため、データ更新を中止しました。"
+            "tools/migrate_genpinhyo_db.py で修復してください。"
+            f"（{result.splitlines()[0]}）"
+        )
+
+
+def rebuild_genpinhyo(conn):
+    """壊れた genpinhyo テーブルを作り直す。同じロットの行が複数あれば、最後に書かれた行を残す。
+
+    「最後に書かれた行」＝ rowid がいちばん大きい行（REPLACE INTO は書くたびに新しい rowid を振る）。
+
+    ⚠ 壊れたテーブルでは「rowid で行を探す」と見つからない行がある（rowid の並びが崩れているため）。
+      必ずテーブルを頭から全部読み（NOT INDEXED）、重なりの整理は Python 側で行う。
+      SQL の `WHERE rowid IN (...)` で絞ると行が消える（2026-10-26 に実際に約2,400行消えた）。
+    ⚠ 作り直したあとの行数が「元のロットの数」と合わなければ、元に戻して止める。
+
+    Returns:
+        (作り直す前の行数, 作り直したあとの行数)
+    """
+    existing = [row[1] for row in conn.execute("PRAGMA table_info(genpinhyo)")]
+    columns = [name for name in GENPINHYO_COLUMNS if name in existing]
+
+    # テーブルを頭から全部読み、ロットごとに rowid が最大の行を残す。
+    latest = {}
+    scanned = 0
+    for rowid, *values in conn.execute(
+        f"SELECT rowid, {', '.join(columns)} FROM genpinhyo NOT INDEXED"
+    ):
+        scanned += 1
+        lot_no = values[0]
+        if lot_no not in latest or rowid > latest[lot_no][0]:
+            latest[lot_no] = (rowid, values)
+
+    conn.commit()
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DROP TABLE IF EXISTS genpinhyo_rebuild")
+        conn.execute(_SCHEMA[0].replace("genpinhyo (", "genpinhyo_rebuild (", 1))
+        conn.executemany(
+            f"INSERT INTO genpinhyo_rebuild ({', '.join(columns)})"
+            f" VALUES ({', '.join('?' for _ in columns)})",
+            [values for _, values in latest.values()],
+        )
+        conn.execute("DROP TABLE genpinhyo")
+        conn.execute("ALTER TABLE genpinhyo_rebuild RENAME TO genpinhyo")
+        conn.execute(_SCHEMA[1])   # 月次の索引を張り直す
+        after = conn.execute("SELECT COUNT(*) FROM genpinhyo").fetchone()[0]
+        if after != len(latest):
+            raise DatabaseCorruptedError(
+                f"genpinhyo の作り直しで行数が合いません（ロット {len(latest):,}件 → {after:,}行）"
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return scanned, after
+
+
 def connect(path=None):
     """genpinhyo.db につなぐ。
 

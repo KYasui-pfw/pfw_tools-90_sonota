@@ -268,6 +268,45 @@ class TagExcelTests(unittest.TestCase):
         self.assertEqual(tag_excel._template_for(2000, False).name, "template.xlsx")
 
 
+class RebuildTests(unittest.TestCase):
+    """壊れた genpinhyo の作り直し（db.rebuild_genpinhyo）。"""
+
+    def test_keeps_latest_row_per_lot(self):
+        conn = sqlite3.connect(":memory:")
+        # 索引が壊れて同じロットが2行入った状態を、主キーの無いテーブルで再現する。
+        conn.execute(f"CREATE TABLE genpinhyo ({', '.join(c + ' TEXT' for c in db.GENPINHYO_COLUMNS)})")
+        conn.executemany("INSERT INTO genpinhyo (ロット番号, B1図番) VALUES (?, ?)",
+                         [("H1", "古い"), ("H2", "x"), ("H1", "新しい")])
+        conn.commit()
+
+        scanned, after = db.rebuild_genpinhyo(conn)
+        self.assertEqual((scanned, after), (3, 2))
+        self.assertEqual(conn.execute("SELECT ロット番号, B1図番 FROM genpinhyo ORDER BY 1").fetchall(),
+                         [("H1", "新しい"), ("H2", "x")])
+        self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        # 作り直したあとは主キーが効く（同じロットは REPLACE で1行のまま）
+        conn.execute("REPLACE INTO genpinhyo (ロット番号) VALUES ('H1')")
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM genpinhyo WHERE ロット番号 = 'H1'").fetchone(), (1,))
+
+
+class CorruptedDbTests(TempDbTestCase):
+    run_update = RunUpdateTests.run_update
+
+    def test_corrupted_db_stops_before_writing(self):
+        with mock.patch("genpin.db.check_integrity", side_effect=db.DatabaseCorruptedError("壊れている")):
+            with self.assertRaises(db.DatabaseCorruptedError):
+                self.run_update([slip()])
+        self.assertEqual(self.query("SELECT COUNT(*) FROM genpinhyo"), [(0,)])
+        self.assertFalse(config.BACKUP_DIR.exists() and any(config.BACKUP_DIR.iterdir()))
+
+    def test_healthy_db_passes_check(self):
+        conn = db.connect()
+        try:
+            db.check_integrity(conn)
+        finally:
+            conn.close()
+
+
 class BackupTests(TempDbTestCase):
     def test_backup_and_prune(self):
         config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
