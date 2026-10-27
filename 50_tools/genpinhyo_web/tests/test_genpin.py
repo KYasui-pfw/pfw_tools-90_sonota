@@ -252,20 +252,86 @@ class TagExcelTests(unittest.TestCase):
         self.assertEqual(entries[3].notice, "メッキ")
 
     def test_book_cells(self):
-        data, name = tag_excel.build_tag_book([self.row(), self.row(ロット番号="H2")])
+        data, name = tag_excel.build_tag_book(
+            [self.row(), self.row(ロット番号="H2"), self.row(ロット番号="H3"), self.row(ロット番号="H4")])
         self.assertTrue(name.startswith("現品票_"))
         sheet = openpyxl.load_workbook(io.BytesIO(data)).active
+        rows = tag_excel.ROWS_PER_TAG
         self.assertEqual(sheet.cell(1, 30).value, "H1")
-        self.assertEqual(sheet.cell(1 + 18, 30).value, "H2")
+        self.assertEqual(sheet.cell(1 + rows, 30).value, "H2")
         self.assertEqual(sheet.cell(4, 24).value, "11月7次")
         self.assertEqual(sheet.cell(8, 7).value, "b1")
-        self.assertEqual(len(sheet._images), 2)
-        self.assertIn("$AR$35", sheet.print_area)
+        self.assertEqual(len(sheet._images), 4)
+        # 3枚ごとに改ページ
+        self.assertEqual([b.id for b in sheet.row_breaks.brk], [rows * 3])
+        # ページの中央に寄せる。最後のページ（1枚）も3枚分の高さを印刷範囲にして、位置をそろえる
+        self.assertTrue(sheet.print_options.horizontalCentered)
+        self.assertTrue(sheet.print_options.verticalCentered)
+        self.assertIn(f"$AR${rows * 6}", sheet.print_area)
+        self.assertEqual(sheet.row_dimensions[rows * 6].height, sheet.row_dimensions[rows].height)
 
-    def test_template_choice(self):
-        self.assertEqual(tag_excel._template_for(9, False).name, "template5.xlsx")
-        self.assertEqual(tag_excel._template_for(10, True).name, "template6b.xlsx")
-        self.assertEqual(tag_excel._template_for(2000, False).name, "template.xlsx")
+    def test_three_tags_fit_a4(self):
+        """1ページ分（3枚 − 最後のすき間）の高さが A4 に収まり、すき間が点線で2等分されていること。"""
+        from genpin import tag_layout
+        heights = tag_layout.ROW_HEIGHTS
+        self.assertEqual(tag_layout.TAGS_PER_PAGE, 3)
+        self.assertEqual(len(heights), tag_layout.ROWS_PER_TAG)
+        gap = heights[tag_layout.CUT_ROW - 1:]
+        self.assertEqual(gap[0], gap[1])
+        # RICOH IM C3500 で 891.5pt ではみ出した（875.5pt までは収まった）。それより余裕を残しておく。
+        self.assertLessEqual(sum(heights) * 3 - sum(gap), 865)
+
+    def test_last_tag_of_page_hides_gap(self):
+        """ページの最後の1枚だけ、下のすき間（19・20行目）を隠す。中央寄せで切った3枚を等分にするため。"""
+        data, _ = tag_excel.build_tag_book([self.row(ロット番号=f"H{i}") for i in range(4)])
+        sheet = openpyxl.load_workbook(io.BytesIO(data)).active
+        rows = tag_excel.ROWS_PER_TAG
+        hidden = [row for row in range(1, rows * 6 + 1) if sheet.row_dimensions[row].hidden]
+        self.assertEqual(hidden, [rows * 2 + 19, rows * 2 + 20, rows * 5 + 19, rows * 5 + 20])
+
+    def test_borders_survive_merge(self):
+        """結合したセルの罫線が、2枚目にも残っていること（結合で罫線が消えていた不具合）。"""
+        data, _ = tag_excel.build_tag_book([self.row(), self.row(ロット番号="H2")])
+        sheet = openpyxl.load_workbook(io.BytesIO(data)).active
+        rows = tag_excel.ROWS_PER_TAG
+        for offset in (0, rows):
+            self.assertEqual(sheet.cell(1 + offset, 5).border.top.style, "thin")       # 現品票の上辺
+            self.assertEqual(sheet.cell(2 + offset, 40).border.bottom.style, "thin")   # ロット番号の下辺
+            self.assertEqual(sheet.cell(18 + offset, 30).border.bottom.style, "thin")  # 工程の下辺
+            self.assertEqual(sheet.cell(17 + offset, 44).border.right.style, "thin")   # 工程の右辺
+
+    def test_layout_labels(self):
+        """図番の見出し（B・F の番号は無し、手書図番・予備項目を追加）と、2枚目にも枠があること。"""
+        data, _ = tag_excel.build_tag_book([self.row(**{"手書き図番": "X@", "予備図番1": "S1"}), self.row(ロット番号="H2")])
+        sheet = openpyxl.load_workbook(io.BytesIO(data)).active
+        labels = [sheet.cell(row, 1).value for row in range(8, 17)]
+        self.assertEqual(labels, ["B　図番：", "B　図番：", "F　図番：", "F　図番：",
+                                  "L　図番：", "R　図番：", "C　図番：", "手書図番：", "予備項目："])
+        self.assertEqual(sheet.cell(5, 1).value, "完成部番：")
+        self.assertEqual((sheet.cell(15, 7).value, sheet.cell(16, 7).value), ("X@", "S1"))
+        rows = tag_excel.ROWS_PER_TAG
+        self.assertEqual(sheet.cell(16 + rows, 1).value, "予備項目：")
+        self.assertEqual(sheet.cell(5 + rows, 7).font.sz, sheet.cell(5, 7).font.sz)
+        self.assertEqual(sheet.cell(19, 1).border.bottom.style, "dotted")   # 切り取り線
+
+    def test_qr_can_be_read(self):
+        import zxingcpp
+        from PIL import Image
+        text = "jp.co.cimtops.ireporter.openreport:repid=68376"
+        image = Image.open(io.BytesIO(tag_excel.make_qr_png(text)))
+        self.assertEqual(image.size, (135, 135))
+        background = Image.new("RGB", image.size, "white")
+        background.paste(image, mask=image.split()[3])
+        found = zxingcpp.read_barcodes(background.resize((540, 540), Image.NEAREST))
+        self.assertEqual(found[0].text, text)
+
+    def test_single_tag(self):
+        entry = tag_excel.TagEntry(lot_no="KARI1", getsuji="11月_次", hmcd="X", qty=1, header="【再発行】",
+                                   qr_png=tag_excel.make_qr_png("x"))
+        data, name = tag_excel.build_single_tag(entry)
+        sheet = openpyxl.load_workbook(io.BytesIO(data)).active
+        self.assertTrue(name.startswith("手入力現品票_"))
+        self.assertEqual((sheet.cell(1, 30).value, sheet.cell(1, 15).value), ("KARI1", "【再発行】"))
 
 
 class RebuildTests(unittest.TestCase):

@@ -59,7 +59,8 @@ def show_process_and_drawing(hmcd, version):
     for api_key, column in portal_api.DRAWING_COLUMNS.items():
         table[column] = drawing[api_key]
     st.dataframe(pd.DataFrame([table]), hide_index=True)
-    return process, {key: drawing[key] for key in ("B1", "B2", "F1", "F2", "L", "R", "C")}
+    # 現品票に載せる図番（B〜C・手書図番・予備項目）。API の項目名と現品票の欄の名前は同じ。
+    return process, {key: drawing.get(key, "") for key in tag_excel.DRAWING_FIELDS}
 
 
 def create_report(values):

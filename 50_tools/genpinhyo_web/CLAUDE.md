@@ -28,7 +28,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `genpin/db.py` | genpinhyo.db の接続（WAL・timeout 30秒）・テーブル定義・バックアップ・印刷の記録・エラーの記録 |
 | `genpin/update.py` | **データ更新。画面と夜間処理で共通の、ただ1つの処理** |
 | `genpin/listing.py` | 画面の一覧を組み立てる（部品の設定・削除フラグ・帳票発行ID） |
-| `genpin/tag_excel.py` | 現品票の Excel（QR はメモリ上で作る。セル位置は `TAG_CELLS`） |
+| `genpin/tag_layout.py` | 現品票1枚分のレイアウト（罫線・結合・見出し・行の高さ・印刷設定）。**ひな形の Excel は使わない**。見た目を変えるときはここ |
+| `genpin/tag_excel.py` | 現品票の Excel（レイアウトを必要な枚数だけ並べ、値と QR を入れる。値のセル位置は `TAG_CELLS`） |
 | `genpin/conmas.py` | i-Reporter 帳票の自動作成（ConMas Manager を Selenium で操作） |
 | `genpin/portal_api.py` | 業務ポータル（Django）の読み取りAPI。**標準ライブラリだけ**（check_input も使う） |
 | `genpin/irepo.py` | i-Reporter の PostgreSQL（客先マスタ・帳票発行ID・帳票定義） |
@@ -54,7 +55,10 @@ genpinhyo（REPLACE）・buhin_irepo_mst（新しい部品名を QRコードレ�
 - ⚠ 書く前に `PRAGMA quick_check` で点検し、壊れていれば止める（`db.check_integrity`）。ロット番号の索引が壊れていると
   REPLACE が既存の行を見つけられず、同じロットの行が更新のたびに増える（2026-10-26 に本番の写しで発生）。
   直すのは `tools/migrate_genpinhyo_db.py`（`db.rebuild_genpinhyo`。⚠ 壊れたテーブルを rowid で引くと行が消えるので、全件を読んで Python で整理する）
-- 画面を開いた最初の1回と「データ更新」ボタンで動く。ボタンのときは、表示中の月の未作成の i-Reporter 帳票も作る
+- 動くのは、タスクスケジューラの `dbupdate.py`（**15分ごと**）・`create_report.py` と、画面の「データ更新」ボタン。
+  ボタンのときは、表示中の月の未作成の i-Reporter 帳票も作る
+- ⚠ 画面を開いたときにはデータ更新をしない（2026-10-26 決定。開くのが約5秒遅くなるため）。
+  一覧は DB ファイルの更新日時が変わると読み直す（`load_tag_list` の `db_stamp`）ので、夜間処理の結果もそのまま出る
 - ⚠ 加工伝票の「加工部番」は**変換済み**（`478-409TA33`）。A1 `lots/` は変換前の品目CDを受け取る約束なので、加工伝票の部番を送ると二重に変換されて引けない。加工伝票は A4 を使う
 
 ## DB（`Database/`）
@@ -90,4 +94,9 @@ genpinhyo（REPLACE）・buhin_irepo_mst（新しい部品名を QRコードレ�
 
 - ⚠ **本番の場所はまだ `D:\py\genpin_check`**。i-Reporter スクリプト（`90_tools/75_genpin展開`）と Django の checksheet.db の読み先がそこを向いている。切り替えるときは両方を直す
 - ⚠ 時限処理（CHANGE GEAR BOX・払出先の除外）は `genpin/update.py` の該当ブロックだけ。終わらせるときはそこを直す
+- ⚠ 現品票は1枚20行（図番9行＝B・B・F・F・L・R・C・手書図番・予備項目）。**A4 1枚に3枚**（昔のひな形と同じ）で、3枚ごとに改ページ（`tag_layout.TAGS_PER_PAGE`）。
+  **点線で切ると A4 が3等分になり、枠がそれぞれの真ん中に来る**ようにしてある（すき間を点線で2等分・ページの最後の1枚はすき間を隠す・上下左右の中央寄せ・余白の最小値は上下0）。
+  最後のページの足りない枚数ぶんは空の行で埋めて印刷範囲に入れる（1〜2枚のページも同じ位置に出すため）。
+  ⚠ 行の高さ（`tag_layout.ROW_HEIGHTS`）を増やすと Excel が途中で勝手に改ページし、以降が全部ずれる。余裕は2〜3%しかない（詳しくは tag_layout.py のコメント）
+  2枚目以降は1枚目の書式を写して作る（1枚ずつ書式を設定すると openpyxl が遅い）。結合も openpyxl の merge_cells を使わない（`tag_layout._merge`。結合が増えると急に遅くなる）
 - ⚠ 半角カナの列名 `ﾒｯｷ` は Python のキーワード引数に書けない（全角に読み替えられる）。辞書のキーとして扱う

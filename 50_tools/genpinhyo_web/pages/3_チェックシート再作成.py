@@ -89,7 +89,7 @@ def main():
             process=row["工程"],
             header=REISSUE_HEADER,
             notice=tag_excel.PLATING_NOTICE if tag_excel.is_plating(row["ﾒｯｷ"]) else "",
-            drawings={key: row[f"{key}図番"] for key in ("B1", "B2", "F1", "F2", "L", "R", "C")},
+            drawings=tag_excel.drawings_of(row),
             qr_png=tag_excel.make_qr_png(tag_excel.qr_text(row)),
         )
         data, file_name = tag_excel.build_single_tag(entry)

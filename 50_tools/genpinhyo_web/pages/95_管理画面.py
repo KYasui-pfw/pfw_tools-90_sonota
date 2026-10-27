@@ -513,8 +513,8 @@ def main_app():
         st.session_state['last_error'] = None
 
     # タブの作成
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "内線電話帳取込", "所属修正", "表示順修正", "社員情報追加", "使い方"
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "内線電話帳取込", "所属修正", "表示順修正", "社員情報追加", "使い方", "データ取得元"
     ])
 
     # --- タブ1: 内線電話帳取込 ---
@@ -887,6 +887,74 @@ def main_app():
             text = f.read()
         text = text.replace(r'](i', r'](app/static/i')
         st.markdown(text, unsafe_allow_html=True)
+
+    with tab6:
+        show_data_sources()
+
+
+# --- データ取得元（現品票システム全体のまとめ） ---
+
+def show_data_sources():
+    """現品票システムが、どこから・どのデータを取ってきているかの一覧。
+
+    ⚠ 接続先やファイルの場所は genpin/config.py の値をそのまま出している（直すのは config.py だけでよい）。
+    ⚠ 取得元を増やした・変えたときは、この表も直すこと。
+    """
+    from genpin import config
+
+    portal = config.PORTAL_API_BASE
+    st.markdown(f"""
+### 現品票システムのデータ取得元
+（接続先・ファイルの場所は `genpin/config.py` の今の設定を表示している）
+
+#### 1. 外から読むもの
+
+| データ | 取得元 | 中身・決まり | 使う画面・処理 |
+|---|---|---|---|
+| **加工伝票**（ロット番号・部番・月次・組立番号・機種・吋・ゲージ・必要数・日付・払出先・客先コード） | 業務ポータル（Django）<br>`GET {portal}/machining-schedule/api/genpinhyo/denpyo/` | 呼ばれるたびに rBOM（FastAPI `/asp/kakou-denpyo`）から組み立てる。伝票単位・払出先で絞る前。旧アプリが読んでいた加工伝票CSV（`\\\\esrv11\\KakouDenpyo\\4-03 ASPKakouDenpyo.csv`）と同じ中身 | データ更新 |
+| **工程VERSION** | 同上（加工伝票と一緒に返る） | ①加工スケジュール作成の作業計画の VER → ②品目の優先VER → ③ 1 の順 | データ更新 |
+| **工程**（例 B1-G1-L1-G2） | 同上 | 加工スケジュール作成の品目工程マスタから、品目CD×VER で組み立てる（工程CDごとの連番付き） | データ更新 |
+| **メッキ** | 同上 | 加工スケジュール作成のメッキマスタ（`$$` のまとめ登録は前方一致） | データ更新 |
+| **図番**（B1・B2・F1・F2・L・R・C／手書き・予備1〜4） | 業務ポータル<br>`POST {portal}/kouteizu/api/genpinhyo/drawings/` | 工程図管理（Obbligato）。品目CD2 → 品目CD の順で引く。記号ごとに前詰め、あふれは予備へ、`@` は手書きへ | データ更新・手入力発行・チェック項目入力（検索） |
+| **工程**（手入力用） | 業務ポータル<br>`GET {portal}/machining-schedule/api/genpinhyo/process-strings/` | 品目CD×VER ごとの工程文字列 | 手入力発行 |
+| **品目工程マスタ＋加工機名** | 業務ポータル<br>`GET {portal}/machining-schedule/api/genpinhyo/process-master/` | 品目CD・VER・工程順・工程・加工機。チェック項目入力が起動時に checksheet.db へ写す（マスタから消えた工程は、チェック項目ごと消える） | チェック項目入力 |
+| **CHANGE GEAR BOX**（時限処理） | rBOM FastAPI<br>`POST {config.RBOM_API_BASE}/query`（D3520・D3010） | 引当（D3520 の品目名 CHANGE GEAR BOX）を CH＋8桁のロット番号で現品票にする。VER は `lots/` API で引く | データ更新 |
+| **客先名・国名** | i-Reporter（`ESRV10/irepodb`）<br>`view_mst_custom_record`（M_CUSTOMER） | 客先コードで引く | データ更新・手入力発行 |
+| **帳票発行ID** | i-Reporter<br>`view_report_405`（縦）・`view_report_406`（横） | ロット番号ごとにいちばん新しい帳票 | 一覧の表示・印刷・チェックシート再作成・手入力発行 |
+| **帳票定義ID** | i-Reporter<br>`view_def_top`（405・406 の公開中の最新） | i-Reporter の帳票を作るときの定義 | 帳票の自動作成 |
+| **社員**（この管理画面） | 内線電話一覧表 `\\\\fsrv24\\会議室予約\\内線電話一覧表.xls`<br>i-Reporter `view_mst_custom_record`（master_id=7） | 社員マスタ取込用のCSVを作る | 管理画面（内線電話帳取込） |
+
+#### 2. 外へ書くもの
+
+| 書き先 | 中身 | 処理 |
+|---|---|---|
+| ConMas Manager（`{config.CONMAS_URL}`） | i-Reporter のチェックシート（帳票）を作る。Chrome を自動操作して CSV をアップロード | データ更新ボタン・夜間処理（create_report.py）・手入力発行・チェックシート再作成 |
+| `D:\\CustomMaster\\CSV_UPLOAD` | 社員マスタ取込用のCSV | 管理画面 |
+
+#### 3. 自分で持っているデータ（`{config.DATABASE_DIR}`）
+
+| ファイル | テーブル | 中身 | ほかに読んでいるもの |
+|---|---|---|---|
+| genpinhyo.db | genpinhyo | 現品票の本体（1ロット1行） | i-Reporter のヘッダー展開（`header_koushin.py`） |
+| 〃 | buhin_irepo_mst | 部品名ごとの設定（i-Reporter 管理・QR・縦横）。チェック項目入力のタブ4で直す | － |
+| 〃 | delete_mst・excluded_lots | 加工伝票から消えたロット・払出先で除外したロット（一覧に出さない） | － |
+| 〃 | cgb_seino_ch_mapping | CHANGE GEAR BOX の製番 → CH番号 | － |
+| 〃 | print_history・flag_change_log・error_log | 印刷の記録・削除フラグの変化・エラー | － |
+| checksheet.db | kouteizuban・zubancheck | 工程ごとの加工機・図番と、チェック項目 | i-Reporter のチェック展開（`check_tenkai.py`・`check_koushin.py`）・業務ポータルの加工スケジュール作成・esrv10 の写し |
+| mapping_data.db | （この管理画面用） | 所属コード・表示順・追加社員 | － |
+
+#### 4. いつ取りにいくか
+
+| きっかけ | すること |
+|---|---|
+| タスクスケジューラ `dbupdate.py`（15分ごと） | データ更新（加工伝票 → genpinhyo） |
+| タスクスケジューラ `create_report.py` | データ更新 ＋ 当月〜3か月先の未作成の i-Reporter 帳票を作る |
+| 現品票発行の「データ更新」ボタン | データ更新 ＋ 表示中の月の未作成の i-Reporter 帳票を作る |
+| 現品票発行の画面を開いたとき | **データ更新はしない**。DB を読むだけ（DB が書き換わったら読み直す。帳票発行ID は毎回 i-Reporter から読む） |
+| チェック項目入力を起動したとき | 品目工程マスタを checksheet.db に写す |
+
+⚠ データ更新は、外から取るもの（業務ポータル・i-Reporter・rBOM）を全部そろえてから1回で書く。どれか1つでも取れなければ何も書かない。
+""", unsafe_allow_html=True)
 
 
 # --- アプリケーション実行 ---

@@ -271,15 +271,13 @@ def filter_rows(df, ji):
 def show_grid(df):
     """一覧（AG Grid）を出し、チェックされた行を返す（列名は DB の名前に戻してある）。"""
     st.session_state.setdefault("select_all", False)
-    col_select, col_notice, col_help = st.columns([1, 4, 1.5])
+    col_select, _, col_help = st.columns([1, 4, 1.5])
     with col_select:
         if st.session_state["select_all"]:
             if st.button("全解除"):
                 st.session_state["select_all"] = False
         elif st.button("全選択"):
             st.session_state["select_all"] = True
-    with col_notice:
-        st.markdown("お知らせ：EJ用現品票ページは停止しました")
     with col_help:
         if st.button("❓ 現品票が出ない場合"):
             help_dialog()
@@ -353,12 +351,10 @@ def print_tags(selected, shifted):
 def main():
     ui.setup_page("現品票発行", icon="move.gif")
 
-    # 開いた最初の1回はデータ更新をする（帳票発行IDなどを最新にするため。昔からの動き）。
-    if "initialized" not in st.session_state:
-        st.session_state["initialized"] = True
-        with st.spinner("データ更新中…"):
-            run_update()
-
+    # ⚠ 開いたときにはデータ更新をしない（利用者と決定 2026-10-26。開くのに5秒ほど余計にかかっていたため）。
+    #   データ更新はタスクスケジューラの dbupdate.py（15分ごと）と、画面の「データ更新」ボタンで行う。
+    #   一覧は DB が書き換わると読み直すので（load_tag_list の db_stamp）、夜間処理の結果もそのまま出る。
+    #   帳票発行ID は一覧を作るたびに i-Reporter から読むので、データ更新が無くても最新になる。
     month_prefix, ji, update_column = choose_month()
     update_button(update_column, month_prefix)
 

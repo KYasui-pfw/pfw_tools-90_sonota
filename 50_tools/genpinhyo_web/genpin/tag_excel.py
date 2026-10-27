@@ -3,8 +3,8 @@
     一覧から複数枚   build_tag_book      （現品票発行の「チェック済の印刷」）
     1枚だけ          build_single_tag    （手入力発行・チェックシート再作成）
 
-⚠ 以前は同じ処理が「通常」「ずれる場合」「手入力」「再発行」の4か所にコピーされていた。
-  セルの位置を変えるときは TAG_CELLS だけを直す（4つともそろって変わる）。
+⚠ 2026-10-27 から、ひな形の Excel は使わない。1枚分の枠（罫線・見出し）は tag_layout.py が
+  コードで描き、ここは値と QR を入れるだけ。見た目を変えるときは tag_layout.py を直す。
 
 ⚠ QR の画像は以前は work/ フォルダに書き出してから Excel に貼っていた（20分ごとに掃除していた）。
   いまはメモリの中だけで作るので、ファイルは残らない。
@@ -14,14 +14,14 @@ import io
 from dataclasses import dataclass
 
 import openpyxl
-import pyqrcode
+import qrcode
 from openpyxl.drawing.image import Image as ExcelImage
-from PIL import Image
+from PIL import Image, ImageOps
 
-from . import config
+from . import config, tag_layout
 
-# 1枚の現品票が何行ぶんか（2枚目は18行下から始まる）。
-ROWS_PER_TAG = 18
+# 1枚の現品票が何行ぶんか（2枚目は20行下から始まる）。
+ROWS_PER_TAG = tag_layout.ROWS_PER_TAG
 
 # 現品票の各項目を書くセル（1枚目の行, 列）。2枚目以降は行に ROWS_PER_TAG × n を足す。
 TAG_CELLS = {
@@ -30,38 +30,35 @@ TAG_CELLS = {
     "issued": (3, 1),        # 発行日
     "qty": (4, 21),          # 個数
     "hmcd": (5, 7),          # 完成部番
-    "B1": (8, 7),
+    "B1": (8, 7),            # 図番（見出しは tag_layout.DRAWING_ROWS）
     "B2": (9, 7),
     "F1": (10, 7),
     "F2": (11, 7),
     "L": (12, 7),
     "R": (13, 7),
     "C": (14, 7),
+    "handwritten": (15, 7),  # 手書図番（末尾が @ の図番）
+    "spare1": (16, 7),       # 予備項目（7つの枠からあふれた図番の1つ目）
     "lot_no": (1, 30),       # ロット番号
     "getsuji": (4, 24),      # 月次（例 '11月7次'）
     "assy_no": (7, 24),      # 組立番号
     "model": (10, 24),       # 機種
     "inch": (13, 32),
     "gauge": (13, 38),
-    "process": (15, 6),      # 工程
+    "process": (tag_layout.PROCESS_ROW, 6),  # 工程
 }
 QR_ANCHOR_COLUMN = "AI"      # QR を貼る列（行は 3 行目）
 QR_ANCHOR_ROW = 3
-LAST_COLUMN = "AR"           # 印刷範囲の右端
+QR_VERSION = 5               # QR の型番（大きさ）。昔から5
+QR_BOX_SIZE = 3              # 1マスの画素数
+QR_BORDER = 4                # まわりの余白（マス）
 
-# 一覧から作るときのひな形。枚数でひな形を変えている（ひな形ごとに用意してある行数が違うため）。
-#   (この枚数未満なら, ひな形の名前)。「ずれる場合」は名前の末尾に b が付いたひな形を使う。
-TEMPLATES_BY_COUNT = [
-    (10, "template5"),
-    (25, "template6"),
-    (50, "template7"),
-    (100, "template1"),
-    (500, "template2"),
-    (1000, "template3"),
-    (2000, "template4"),
-]
-TEMPLATE_LARGEST = "template"
-SINGLE_TEMPLATE = "add_template"
+# 現品票に載せる図番（TAG_CELLS のキー → 一覧の列名）。
+DRAWING_FIELDS = {
+    "B1": "B1図番", "B2": "B2図番", "F1": "F1図番", "F2": "F2図番",
+    "L": "L図番", "R": "R図番", "C": "C図番",
+    "handwritten": "手書き図番", "spare1": "予備図番1",
+}
 
 # 完成部番にこれを含み、必要数が2以上なら、1個ずつ別の現品票にする（1/3, 2/3, 3/3）。
 SPLIT_PER_PIECE = ("-111", "-404", "-102")
@@ -88,7 +85,7 @@ class TagEntry:
     process: str = ""
     notice: str = ""
     header: str = ""
-    drawings: dict = None   # {"B1": ..., "B2": ..., ..., "C": ...}
+    drawings: dict = None   # {"B1": ..., ..., "C": ..., "handwritten": ..., "spare1": ...}
     qr_png: bytes = b""     # QR（またはエラー画像）の PNG
 
 
@@ -122,17 +119,21 @@ def ireporter_qr_text(report_id):
 
 
 def make_qr_png(text):
-    """QR の PNG を作る（白い部分は透明にする。現品票の枠線に重ねても見えるように）。"""
-    buffer = io.BytesIO()
-    pyqrcode.create(text, error="L", version=5, mode="binary").png(buffer, scale=3)
-    buffer.seek(0)
+    """QR の PNG を作る（白い部分は透明にする。現品票の枠線に重ねても見えるように）。
 
-    image = Image.open(buffer).convert("RGBA")
-    pixels = [
-        (255, 255, 255, 0) if pixel[:3] == (255, 255, 255) else pixel
-        for pixel in image.getdata()
-    ]
-    image.putdata(pixels)
+    大きさは昔と同じ（型番5・誤り訂正L・1マス3画素・余白4マス＝135×135画素）。
+    ⚠ 2026-10-27 に pyqrcode から qrcode に替えた（約2倍速い）。白黒の模様は少し変わることが
+      あるが、読み取れる中身は同じ（tests で読み取って確かめている）。
+    """
+    code = qrcode.QRCode(version=QR_VERSION, error_correction=qrcode.constants.ERROR_CORRECT_L,
+                         box_size=QR_BOX_SIZE, border=QR_BORDER)
+    code.add_data(text.encode("utf-8"))
+    code.make(fit=False)
+    gray = code.make_image().get_image().convert("L")
+
+    # 黒いところだけ見えるようにする（黒＝不透明、白＝透明）。
+    image = Image.new("RGBA", gray.size, (0, 0, 0, 255))
+    image.putalpha(ImageOps.invert(gray))
 
     out = io.BytesIO()
     image.save(out, "PNG")
@@ -153,7 +154,7 @@ def entries_from_rows(rows):
     """
     entries = []
     for row in rows:
-        drawings = {key: row.get(f"{key}図番", "") for key in ("B1", "B2", "F1", "F2", "L", "R", "C")}
+        drawings = drawings_of(row)
         common = dict(
             lot_no=row["ロット番号"],
             getsuji=getsuji_label(row["月次"]),
@@ -184,22 +185,16 @@ def entries_from_rows(rows):
     return entries
 
 
+def drawings_of(row):
+    """一覧の行（辞書）から、現品票に載せる図番を取り出す。"""
+    return {key: row.get(column) or "" for key, column in DRAWING_FIELDS.items()}
+
+
 def _piece_count(row):
     try:
         return int(float(row["必要数"]))
     except (TypeError, ValueError):
         return 0
-
-
-def _template_for(count, shifted):
-    name = TEMPLATE_LARGEST
-    for limit, template in TEMPLATES_BY_COUNT:
-        if count < limit:
-            name = template
-            break
-    if shifted:
-        name += "b"
-    return config.TEMPLATE_DIR / f"{name}.xlsx"
 
 
 def _write_entry(sheet, entry, issued, offset):
@@ -236,11 +231,11 @@ def _save(book):
 
 
 def build_tag_book(rows, shifted=False):
-    """一覧の行から、現品票の Excel を作る。
+    """一覧の行から、現品票の Excel を作る（必要な枚数ぶんだけ）。
 
     Args:
         rows: 一覧の行（辞書）のリスト。並び順のまま印字する
-        shifted: True なら「ずれる場合」のひな形（名前の末尾が b）を使う
+        shifted: True なら「ずれる場合」の印刷設定（少し縮めて上の余白を詰める）
 
     Returns:
         (Excel のバイト列, ダウンロードのファイル名)
@@ -249,18 +244,17 @@ def build_tag_book(rows, shifted=False):
     issued = f"{now:%Y/%m/%d}"
     entries = entries_from_rows(rows)
 
-    book = openpyxl.load_workbook(_template_for(len(entries), shifted))
+    book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = "現品票"
+    tag_layout.setup_sheet(sheet, len(entries), shifted=shifted)
 
+    tag_layout.draw_tags(sheet, len(entries))
     if not entries:
         sheet.cell(*TAG_CELLS["lot_no"]).value = "対象データなし"
 
     for index, entry in enumerate(entries):
         _write_entry(sheet, entry, issued, ROWS_PER_TAG * index)
-
-    last_offset = ROWS_PER_TAG * max(len(entries) - 1, 0)
-    sheet.print_area = f"A1:{LAST_COLUMN}{last_offset + ROWS_PER_TAG - 1}"
 
     prefix = "現品票B_" if shifted else "現品票_"
     return _save(book), f"{prefix}{now:%Y%m%d%H%M%S}.xlsx"
@@ -273,8 +267,10 @@ def build_single_tag(entry):
         (Excel のバイト列, ダウンロードのファイル名)
     """
     now = config.now()
-    book = openpyxl.load_workbook(config.TEMPLATE_DIR / f"{SINGLE_TEMPLATE}.xlsx")
+    book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = "手入力現品票"
+    tag_layout.setup_sheet(sheet, 1)
+    tag_layout.draw_tags(sheet, 1)
     _write_entry(sheet, entry, f"{now:%Y/%m/%d}", 0)
     return _save(book), f"手入力現品票_{now:%Y%m%d%H%M%S}.xlsx"
