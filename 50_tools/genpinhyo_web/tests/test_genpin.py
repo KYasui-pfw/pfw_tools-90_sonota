@@ -82,13 +82,14 @@ class FormatTests(unittest.TestCase):
 
 
 class FilterTests(unittest.TestCase):
-    def test_stock_assy_and_numeric_change_gear_box_are_dropped(self):
+    def test_stock_assy_is_dropped(self):
         kept, excluded = update.filter_slips([
             slip(denpyo_no="H1", assy_no="A00012345"),
             slip(denpyo_no="H2", model_name="CHANGE GEAR BOX", assy_no="000001751"),
             slip(denpyo_no="H3"),
         ])
-        self.assertEqual([s["denpyo_no"] for s in kept], ["H3"])
+        # CHANGE GEAR BOX の数字製番は、時限処理を止めたので（2026-10-28）ほかと同じく残す
+        self.assertEqual([s["denpyo_no"] for s in kept], ["H2", "H3"])
         self.assertEqual(excluded, set())   # 払出先の除外ではないので excluded_lots には入れない
 
     def test_srcd_rules(self):
@@ -186,15 +187,15 @@ class RunUpdateTests(TempDbTestCase):
         self.run_update([slip(denpyo_no="H000000002")])
         self.assertEqual(self.query("SELECT 削除flg FROM delete_mst WHERE ロット番号 = 'H000000001'"), [(0,)])
 
-    def test_change_gear_box_gets_ch_number_and_keeps_it(self):
+    def test_change_gear_box_is_not_added(self):
+        """CHANGE GEAR BOX の時限処理は止めてある（2026-10-28）。rBOM の引当があっても CH の行は作らない。"""
         allocation = {"SEINO": "26SKD002", "HMCD": "G-6503GD", "ALCQTY": 1.0,
                       "TDPLNDT": "2026-11-12T00:00:00", "SPPLDT": "2026-11-20T00:00:00",
                       "ASPLDT": "2026-11-10T00:00:00", "GETSUJI": 2026117}
-        self.run_update([slip(seino="26SKD002")], [allocation])
-        self.run_update([slip(seino="26SKD002")], [allocation])
-        rows = self.query("SELECT ロット番号, 組立番号, 機種, 必要数, 指定納期 FROM genpinhyo WHERE 部品名 = 'CHANGE GEAR BOX'")
-        self.assertEqual(rows, [("CH00000001", "D002", "MX-JS3B", "1", "2026/11/12")])
-        self.assertEqual(self.query("SELECT * FROM cgb_seino_ch_mapping"), [("26SKD002", "CH00000001")])
+        result = self.run_update([slip(seino="26SKD002")], [allocation])
+        self.assertEqual(result.change_gear_boxes, 0)
+        self.assertEqual(self.query("SELECT COUNT(*) FROM genpinhyo WHERE ロット番号 LIKE 'CH%'"), [(0,)])
+        self.assertEqual(self.query("SELECT COUNT(*) FROM cgb_seino_ch_mapping"), [(0,)])
 
     def test_api_failure_writes_nothing(self):
         from genpin import portal_api

@@ -7,8 +7,8 @@
 
 【流れ】
     1. 業務ポータルから加工伝票（伝票単位・払出先で絞る前）を取る。VER・工程・メッキも付いてくる
-    2. 対象外の伝票を外す（A+数字8桁の組立番号・CHANGE GEAR BOX の数字製番・払出先）
-    3. CHANGE GEAR BOX を rBOM の引当から足す（時限処理）
+    2. 対象外の伝票を外す（A+数字8桁の組立番号・払出先）
+    3. （停止中）CHANGE GEAR BOX を rBOM の引当から足す（時限処理。2026-10-28 に止めた）
     4. 客先名・国名（i-Reporter の客先マスタ）と図番（業務ポータル）を付ける
     5. genpinhyo に書く。新しい部品名を buhin_irepo_mst に足す
     6. 削除フラグを付け直す（当月〜3か月先で、加工伝票から消えたロット＝1）
@@ -141,10 +141,11 @@ def filter_slips(slips):
         assy_no = (slip.get("assy_no") or "").strip()
         if STOCK_ASSY_PATTERN.match(assy_no):
             continue
-        # CHANGE GEAR BOX で製番が数字だけのもの（時限処理・2026-05-26 追加）は、
+        # （停止中・2026-10-28）CHANGE GEAR BOX で製番が数字だけのもの（時限処理・2026-05-26 追加）は、
         # rBOM の引当から CH番号で別に作るので、加工伝票側は使わない。
-        if (slip.get("model_name") or "").strip() == CHANGE_GEAR_BOX and assy_no.isdigit():
-            continue
+        # 戻すときは下の2行と、run_update の build_change_gear_boxes・cgb_seino_ch_mapping の書き込みを一緒に戻す。
+        # if (slip.get("model_name") or "").strip() == CHANGE_GEAR_BOX and assy_no.isdigit():
+        #     continue
 
         excluded = is_excluded_by_srcd(slip.get("part_name", ""), slip.get("srcd", ""))
         lot_no = slip["denpyo_no"]
@@ -159,6 +160,8 @@ def filter_slips(slips):
 # ---------------------------------------------------------------------------
 # 3. CHANGE GEAR BOX（時限処理・2026-05-26 追加）
 # ---------------------------------------------------------------------------
+# ⚠ 2026-10-28 に停止（CH のロット番号はもう発生しない見込みのため）。run_update から呼んでいない。
+#   何かのときの参考に、処理はそのまま残してある（rbom.py も同じ）。
 # rBOM の加工伝票に出てこない CHANGE GEAR BOX を、引当（D3520）から現品票にする。
 # ロット番号は製番ごとに CH＋8桁で振り、cgb_seino_ch_mapping に覚えておく（次回も同じ番号になる）。
 
@@ -355,8 +358,11 @@ def run_update():
         db.check_integrity(conn)
         db.backup_genpinhyo()
         db.ensure_schema(conn)
-        change_gear_boxes, new_mappings = build_change_gear_boxes(conn, kept)
-        all_slips = kept + change_gear_boxes
+        # （停止中・2026-10-28）CHANGE GEAR BOX の時限処理。戻すときは filter_slips の除外も一緒に戻す。
+        # change_gear_boxes, new_mappings = build_change_gear_boxes(conn, kept)
+        # all_slips = kept + change_gear_boxes
+        change_gear_boxes = []
+        all_slips = kept
 
         hmcds = sorted({slip.get("hmcd") or "" for slip in all_slips} - {""})
         drawings = {row["item"]: row for row in portal_api.fetch_drawings(hmcds)}
@@ -369,10 +375,11 @@ def run_update():
             f" VALUES ({', '.join('?' for _ in columns)})",
             [[record[column] for column in columns] for record in records],
         )
-        conn.executemany(
-            "INSERT OR IGNORE INTO cgb_seino_ch_mapping (seino, ch_no) VALUES (?, ?)",
-            new_mappings,
-        )
+        # （停止中・2026-10-28）CHANGE GEAR BOX の CH番号を覚えておく。
+        # conn.executemany(
+        #     "INSERT OR IGNORE INTO cgb_seino_ch_mapping (seino, ch_no) VALUES (?, ?)",
+        #     new_mappings,
+        # )
 
         before = conn.total_changes
         conn.executemany(

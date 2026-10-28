@@ -225,8 +225,6 @@ def update_button(column, month_prefix):
             finally:
                 st.session_state["db_updating"] = False
             st.rerun()
-        st.markdown('<font color="red">↑ CHANGE GEAR BOX</font>はデータ更新ボタンを押下すると、表示されます',
-                    unsafe_allow_html=True)
         if "update_message" in st.session_state:
             kind, message = st.session_state.pop("update_message")
             (st.error if kind == "error" else st.warning)(message)
@@ -283,12 +281,16 @@ def show_grid(df):
             help_dialog()
 
     shown = df.rename(columns={"G": GAUGE_LABEL})
+    extra = [name for name in db.EXTRA_DRAWING_COLUMNS if name in shown.columns]
+    if extra and "C図番" in shown.columns:
+        rest = [name for name in shown.columns if name not in extra]
+        at = rest.index("C図番") + 1
+        shown = shown[rest[:at] + extra + rest[at:]]
     builder = GridOptionsBuilder.from_dataframe(shown)
     builder.configure_selection(selection_mode="multiple", use_checkbox=True)
     builder.configure_default_column(filter=False)
-    for name in ["ﾒｯｷ", *db.HIDDEN_DRAWING_COLUMNS]:
-        if name in shown.columns:
-            builder.configure_column(name, hide=True)
+    if "ﾒｯｷ" in shown.columns:
+        builder.configure_column("ﾒｯｷ", hide=True)
     options = builder.build()
     options["localeText"] = ui.AGGRID_LOCALE
     options["onFirstDataRendered"] = SELECT_ALL_JS if st.session_state["select_all"] else DESELECT_ALL_JS

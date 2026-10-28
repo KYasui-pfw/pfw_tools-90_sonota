@@ -43,8 +43,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 業務ポータル A4 /machining-schedule/api/genpinhyo/denpyo/
   （加工伝票の伝票単位・払出先で絞る前 ＋ VER・工程・メッキ）
-    ↓ 対象外を外す: 組立番号 A＋数字8桁 / CHANGE GEAR BOX の数字製番 / 払出先（下記）
-    ↓ ＋ CHANGE GEAR BOX（rBOM D3520 の引当 → CH＋8桁。VER は A1 lots で引く）
+    ↓ 対象外を外す: 組立番号 A＋数字8桁 / 払出先（下記）
+    （停止中）CHANGE GEAR BOX（rBOM D3520 の引当 → CH＋8桁）。2026-10-28 に止めた。コードはコメントアウトで残してある
     ↓ ＋ 客先名・国名（i-Reporter 客先マスタ）＋ 図番（業務ポータル drawings）
 genpinhyo（REPLACE）・buhin_irepo_mst（新しい部品名を QRコードレイアウト区分=2 で）
     ↓ 削除フラグ: 当月〜3か月先で、加工伝票に無いロット＝1（変化は flag_change_log）
@@ -93,7 +93,8 @@ genpinhyo（REPLACE）・buhin_irepo_mst（新しい部品名を QRコードレ�
 ## 注意
 
 - ⚠ **本番の場所はまだ `D:\py\genpin_check`**。i-Reporter スクリプト（`90_tools/75_genpin展開`）と Django の checksheet.db の読み先がそこを向いている。切り替えるときは両方を直す
-- ⚠ 時限処理（CHANGE GEAR BOX・払出先の除外）は `genpin/update.py` の該当ブロックだけ。終わらせるときはそこを直す
+- ⚠ 時限処理（払出先の除外）は `genpin/update.py` の該当ブロックだけ。終わらせるときはそこを直す
+- CHANGE GEAR BOX の時限処理は 2026-10-28 に停止（CH のロット番号はもう発生しない見込み）。`update.py` の呼び出し3か所（`filter_slips` の除外・`build_change_gear_boxes`・`cgb_seino_ch_mapping` の書き込み）をコメントアウトしてあり、関数と `rbom.py` は参考に残している
 - ⚠ 現品票は1枚20行（図番9行＝B・B・F・F・L・R・C・手書図番・予備項目）。**A4 1枚に3枚**（昔のひな形と同じ）で、3枚ごとに改ページ（`tag_layout.TAGS_PER_PAGE`）。
   **点線で切ると A4 が3等分になり、枠がそれぞれの真ん中に来る**ようにしてある（すき間を点線で2等分・ページの最後の1枚はすき間を隠す・上下左右の中央寄せ・余白の最小値は上下0）。
   最後のページの足りない枚数ぶんは空の行で埋めて印刷範囲に入れる（1〜2枚のページも同じ位置に出すため）。
