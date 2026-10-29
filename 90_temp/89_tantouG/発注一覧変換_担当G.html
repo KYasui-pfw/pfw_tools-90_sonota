@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>発注一覧変換_担当G</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+:root {
+    --pico-font-family: 'Noto Sans JP', sans-serif;
+    --pico-font-size: 85%;
+    --pico-spacing: 0.5rem;
+    --pico-border-radius: 0;
+}
+body > header { background: #1f3a5f; color: #fff; padding: 0.6rem 1rem; margin-bottom: 1rem; }
+body > header h1 { color: #fff; font-size: 1.2rem; margin: 0; }
+main.container { max-width: 860px; }
+.status { font-size: 0.9rem; color: var(--pico-muted-color); }
+.error { color: #c62828; white-space: pre-wrap; }
+.log { font-size: 0.85rem; margin: 0; padding-left: 1.2rem; }
+.dropzone { border: 2px dashed var(--pico-muted-border-color); padding: 1rem; margin-bottom: 1rem; text-align: center; }
+.dropzone.over { border-color: var(--pico-primary); background: rgba(1, 114, 173, 0.08); }
+.dropzone p { margin-bottom: 0.3rem; }
+.dropzone input[type=file] { max-width: 420px; margin: 0 auto 0.3rem; }
+.loading { border: 2px solid #f0b400; background: #fff8e1; padding: 1rem 1.2rem; margin-bottom: 1rem; }
+.loading p { margin: 0; font-size: 1.3rem; font-weight: 700; color: #6d4c00; }
+.loading p.sub { margin-top: 0.4rem; font-size: 0.95rem; font-weight: 400; }
+.downloads { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 1rem; }
+.downloads button { margin: 0; font-size: 0.85rem; padding: 0.3rem 0.6rem; }
+</style>
+</head>
+<body>
+<header><h1>発注一覧変換_担当G</h1></header>
+
+<main class="container" x-data="app()">
+    <article>
+        <div class="loading" x-show="!ready && !error">
+            <p aria-busy="true">変換エンジン（Python）を読み込んでいます…</p>
+            <p class="sub">インターネットから部品を取ってくるため、数十秒〜数分かかることがあります。<br>
+                この表示が消えるまでお待ちください（画面を閉じたり、再読み込みしたりしないでください）。</p>
+        </div>
+
+        <div class="dropzone" :class="{ over: dragOver }"
+             @dragover.prevent="dragOver = true"
+             @dragleave.prevent="dragOver = false"
+             @drop.prevent="onDrop($event)">
+            <p>ここにExcelファイル（.xlsx）をドラッグ＆ドロップ</p>
+            <p class="status">または</p>
+            <input type="file" accept=".xlsx" x-ref="fileInput" @change="onFile($event)" :disabled="!ready || busy">
+            <p class="status">発注一覧_〇〇.xlsx（集約注文書発行の発注一覧出力）</p>
+            <p x-show="file"><strong>選択中:</strong> <span x-text="file && file.name"></span></p>
+        </div>
+
+        <button @click="convert()" :disabled="!ready || busy || !file" :aria-busy="busy">
+            <span x-text="busy ? '変換中…' : '変換する'"></span>
+        </button>
+        <p class="status" x-show="busy" x-text="progress"></p>
+
+        <template x-if="error">
+            <p class="error" x-text="error"></p>
+        </template>
+
+        <template x-if="files.length">
+            <div>
+                <p><strong>ダウンロード（仕入先ごと・<span x-text="files.length"></span>件）</strong></p>
+                <!-- 仕入先が1社ならファイルも1つなので、ZIP のボタンは出さない -->
+                <button class="secondary" x-show="files.length > 1" @click="download(zip.data, zip.name)">
+                    すべてZIPでダウンロード
+                </button>
+                <div class="downloads">
+                    <template x-for="f in files" :key="f.name">
+                        <button class="outline" @click="download(f.data, f.name)" x-text="f.label"></button>
+                    </template>
+                </div>
+            </div>
+        </template>
+
+        <template x-if="messages.length">
+            <div>
+                <p><strong>変換結果</strong></p>
+                <ul class="log">
+                    <template x-for="m in messages"><li x-text="m"></li></template>
+                </ul>
+            </div>
+        </template>
+    </article>
+    <p class="status">集約発注番号・発注番号・行番号・仕入先CD（＋集約納期・発注数計）を Excel から読み、
+        残りは rBOM（http://pfw-api）から取り直して作ります。社内LANにつながっている必要があります。</p>
+</main>
+
+<script id="py-convert" type="text/plain">
+import datetime
+import io
+import json
+import re
+import unicodedata
+import zipfile
+
+import openpyxl
+from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.utils import get_column_letter
+
+# ---------------------------------------------------------------------------
+# rBOM 汎用クエリAPI（参照専用キー）
+# ---------------------------------------------------------------------------
+API_URL = "http://pfw-api/query"
+API_KEY = "oG5^Ls%#20yq"
+PAGE_LIMIT = 10000
+CHUNK_SIZE = 1000          # IN 句は1000件まで（ORA-01795）
+
+# ---------------------------------------------------------------------------
+# 入力 Excel
+#   ・発注一覧_〇〇.xlsx … 先頭シート「集約発注マッピング」（発注数計がある・集約金額は無い）
+#   ・発行一覧_〇〇.xlsx … シート「発行一覧_rBOM発注番号」（集約個数・集約金額がある）
+#     （どちらの形式かはファイル名ではなくシート名・列名で判断する）
+# 列は1行目の項目名で引く（並び順は変わりうる）。
+# ---------------------------------------------------------------------------
+DETAIL_SHEET = "発行一覧_rBOM発注番号"
+REQUIRED_COLUMNS = ["集約発注番号", "集約納期", "発注番号", "行番号", "仕入先CD"]
+AGG_QTY_COLUMNS = ["集約個数", "発注数計"]   # どちらか一方がある
+AGG_AMOUNT_COLUMN = "集約金額"                # 発行一覧にだけある
+
+# 出力の列（左から）（利用者の指定 2026-10-27）
+# ⚠ これは仕入先CD 1592 向けに決めたレイアウト。ほかの仕入先はまだ決まっていないので、
+#   当面は全仕入先をこのレイアウトで出す（利用者の指示）。仕入先ごとに変えるときは
+#   担当I（../88_担当I発注一覧）の columns_for のように仕入先CDで列を切り替える
+OUTPUT_COLUMNS = [
+    "注文書発行区分", "発注番号", "品目ｺｰﾄﾞ", "発注数", "希望納期", "単価", "工程ｺｰﾄﾞ", "備考",
+    "金額", "品名", "回答納期", "注文書発行日", "担当者略称", "集約備考",
+]
+NUMBER_COLUMNS = {"発注数", "単価", "金額"}
+# 列幅は中身に合わせる（fit_widths）。集約備考だけは固定幅で、セル内で改行・折り返す（行の高さは Excel 任せ）
+WRAP_COLUMNS = {"集約備考"}
+# 集約備考の幅は約750px（利用者の指示 2026-10-29）。利用者の Excel で幅81が711pxだったので、その比で換算
+FIXED_WIDTHS = {"集約備考": 85.4}
+PRNKBN_TEXT = {"1": "未発行", "2": "発行済"}
+JOIN_SEP = " / "
+BREAKDOWN_SEP = ", "          # 集約備考の明細どうしの区切り（注文書PDFの備考欄と同じ）
+BREAKDOWN_PER_LINE = 2        # 集約備考は明細2件ごとにセル内で改行する（利用者の指示 2026-10-29）
+
+
+# ---------------------------------------------------------------------------
+# 小さな道具
+# ---------------------------------------------------------------------------
+def text(v):
+    return "" if v is None else str(v).strip()
+
+
+DATE_RE = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
+
+
+def date_text(v):
+    """日付を YYYY/MM/DD の文字列にする（API の "2026-05-01T00:00:00"・Excel の日付型・"2026/5/1" のどれでも）"""
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        return v.strftime("%Y/%m/%d")
+    m = DATE_RE.match(text(v))
+    if not m:
+        return text(v)
+    return f"{m.group(1)}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
+
+
+def num(v):
+    """数値にする（文字列でもよい）。空欄・数値でないものは None。整数なら int"""
+    s = text(v).replace(",", "")
+    if s == "":
+        return None
+    try:
+        n = float(s)
+    except ValueError:
+        return None
+    return int(n) if n.is_integer() else n
+
+
+def pono_text(v):
+    """発注番号。数字だけなら9桁にそろえる（Excel で数値にされて先頭の0が落ちていても戻す）"""
+    s = text(v)
+    if isinstance(v, (int, float)) or (s.isdigit() and len(s) < 9):
+        s = str(int(float(s))).zfill(9)
+    return s
+
+
+def lineno_int(v):
+    n = num(v)
+    return int(n) if n is not None else None
+
+
+def getsuji_text(v):
+    """D3010.GETSUJI（YYYYMM×10＋次）を「〇月〇次」にする（2027017 → 1月7次）。
+    集約注文書PDFの備考欄と同じ形（apps/purchase_order views._format_getsuji）"""
+    n = num(v)
+    if n is None:
+        return ""
+    g = int(n)
+    return f"{(g // 10) % 100}月{g % 10}次"
+
+
+def join_unique(values):
+    """空を除き、同じ値は1つにして / でつなぐ（並びは渡された順）"""
+    seen = []
+    for v in values:
+        s = text(v)
+        if s and s not in seen:
+            seen.append(s)
+    return JOIN_SEP.join(seen)
+
+
+def join_number(values):
+    """数値の列：全部同じなら数値のまま、違えば / でつないだ文字列"""
+    nums = [num(v) for v in values if num(v) is not None]
+    if not nums:
+        return None
+    if all(n == nums[0] for n in nums):
+        return nums[0]
+    return join_unique(nums)
+
+
+def chunks(values):
+    values = list(values)
+    for i in range(0, len(values), CHUNK_SIZE):
+        yield values[i:i + CHUNK_SIZE]
+
+
+# ---------------------------------------------------------------------------
+# rBOM API
+# ---------------------------------------------------------------------------
+async def api_post(payload):
+    """1回ぶんの問い合わせ。ブラウザでは pyfetch（fetch）で送る"""
+    from pyodide.http import pyfetch
+    resp = await pyfetch(API_URL, method="POST",
+                         headers={"X-API-KEY": API_KEY, "Content-Type": "application/json"},
+                         body=json.dumps(payload))
+    if not resp.ok:
+        raise RuntimeError(f"rBOM API エラー: HTTP {resp.status}（{payload['table']}）")
+    return (await resp.json())["rows"]
+
+
+async def fetch_in(table, key, values, columns, order_by, extra=None):
+    """key IN (values) で引く。1000件ずつに分け、1万件を超えたらページ送りする"""
+    rows = []
+    for chunk in chunks(sorted({v for v in values if v})):
+        where = {key: {"in": chunk}}
+        if extra:
+            where = {"and": [where] + extra}
+        offset = 0
+        while True:
+            batch = await api_post({"table": table, "where": where, "columns": columns,
+                                    "order_by": order_by, "limit": PAGE_LIMIT, "offset": offset})
+            rows.extend(batch)
+            if len(batch) < PAGE_LIMIT:
+                break
+            offset += PAGE_LIMIT
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 1. Excel を読む
+# ---------------------------------------------------------------------------
+def read_source(data, log):
+    wb = openpyxl.load_workbook(io.BytesIO(bytes(data)), read_only=True, data_only=True)
+    ws = wb[DETAIL_SHEET] if DETAIL_SHEET in wb.sheetnames else wb.worksheets[0]
+    rows = ws.iter_rows(values_only=True)
+    header = next(rows, None) or ()
+    cols = {text(v): i for i, v in enumerate(header) if v is not None}
+
+    missing = [c for c in REQUIRED_COLUMNS if c not in cols]
+    qty_col = next((c for c in AGG_QTY_COLUMNS if c in cols), None)
+    if qty_col is None:
+        missing.append("集約個数 または 発注数計")
+    if missing:
+        raise ValueError(f"シート「{ws.title}」に必要な列がありません: " + "、".join(missing))
+
+    def get(row, name):
+        i = cols.get(name)
+        return row[i] if i is not None and i < len(row) else None
+
+    records = {}
+    src_rows = 0
+    for row in rows:
+        if all(v is None for v in row):
+            continue
+        src_rows += 1
+        pono = pono_text(get(row, "発注番号"))
+        lineno = lineno_int(get(row, "行番号"))
+        if not pono or lineno is None:
+            continue
+        key = (pono, lineno)
+        # 発注一覧は受入ごとに行が分かれるので、発注番号＋行番号で1つにする
+        if key in records:
+            continue
+        records[key] = {
+            "agg_no": text(get(row, "集約発注番号")),
+            "agg_due": date_text(get(row, "集約納期")),
+            "agg_qty": num(get(row, qty_col)),
+            "agg_amount": num(get(row, AGG_AMOUNT_COLUMN)),
+            "srcd": text(get(row, "仕入先CD")),
+        }
+    wb.close()
+    log.append(f"シート: {ws.title}（{src_rows} 行 → 発注明細 {len(records)} 件）")
+    return records
+
+
+# ---------------------------------------------------------------------------
+# 2. rBOM から引き直す
+# ---------------------------------------------------------------------------
+async def fetch_rbom(records, progress):
+    ponos = {pono for pono, _ in records}
+
+    progress("rBOM から発注明細（D3340）を取得中…")
+    d3340 = {}
+    for r in await fetch_in("D3340", "PONO", ponos,
+                            ["PONO", "LINENO", "HMCD", "KTCD", "QTY", "THQTY", "PRICE", "SEINO",
+                             "NOTE", "HMNM", "DRVDT", "RECDT", "AMOUNT"],
+                            ["PONO", "LINENO"]):
+        key = (text(r.get("PONO")), lineno_int(r.get("LINENO")))
+        if key in records:
+            d3340[key] = r
+
+    progress("rBOM から発注（D3330）を取得中…")
+    d3330 = {text(r.get("PONO")): r for r in await fetch_in(
+        "D3330", "PONO", ponos, ["PONO", "PRNKBN", "PRNDT", "TANCD"], ["PONO"])}
+
+    progress("rBOM から生産月次（D3010）・マスタ（社員・仕入先）を取得中…")
+    # 生産月次は集約備考にだけ使う（集約注文書PDFと同じく製番から D3010.GETSUJI を引く）
+    seinos = {text(r.get("SEINO")) for key, r in d3340.items() if records[key]["agg_no"]}
+    d3010 = {text(r.get("SEINO")): getsuji_text(r.get("GETSUJI"))
+             for r in await fetch_in("D3010", "SEINO", seinos, ["SEINO", "GETSUJI"], ["SEINO"])}
+    tancds = {text(r.get("TANCD")) for r in d3330.values()}
+    m0540 = {text(r.get("TANCD")): text(r.get("TANRNM"))
+             for r in await fetch_in("M0540", "TANCD", tancds, ["TANCD", "TANRNM"], ["TANCD"])}
+    srcds = {rec["srcd"] for rec in records.values()}
+    m0710 = {text(r.get("HTRCD")): text(r.get("HTRRNM"))
+             for r in await fetch_in("M0710", "HTRCD", srcds, ["HTRCD", "HTRRNM"], ["HTRCD"])}
+
+    return d3340, d3330, d3010, m0540, m0710
+
+
+# ---------------------------------------------------------------------------
+# 3. 1行にまとめる
+# ---------------------------------------------------------------------------
+def fmt_qty(v):
+    """数量を文字にする（3.0 → "3"）"""
+    n = num(v)
+    return "" if n is None else str(n)
+
+
+def build_lines(records, d3340, d3330, d3010, m0540):
+    """発注明細ごとに、出力に使う値をそろえる"""
+    lines = []
+    for (pono, lineno), rec in sorted(records.items()):
+        d = d3340.get((pono, lineno)) or {}
+        h = d3330.get(pono) or {}
+        tancd = text(h.get("TANCD"))
+        seino = text(d.get("SEINO"))
+        # 集約備考の1件ぶん「発注番号+行番号 / 製番 / 月次 / 数量」。空の項目は飛ばしてつなぐ
+        # （集約注文書PDFの備考欄と同じ。apps/purchase_order views._build_pdf_context）
+        breakdown = JOIN_SEP.join(p for p in (f"{pono}+{lineno:03d}", seino,
+                                              d3010.get(seino, ""), fmt_qty(d.get("QTY"))) if p)
+        lines.append(dict(rec, pono=pono, lineno=lineno, found=bool(d),
+                          prnkbn=text(h.get("PRNKBN")),
+                          hmcd=text(d.get("HMCD")), ktcd=text(d.get("KTCD")),
+                          thqty=num(d.get("THQTY")), drvdt=date_text(d.get("DRVDT")),
+                          recdt=date_text(d.get("RECDT")),
+                          price=num(d.get("PRICE")), seino=seino,
+                          line_note=text(d.get("NOTE")), hmnm=text(d.get("HMNM")),
+                          prndt=date_text(h.get("PRNDT")),
+                          tanrnm=m0540.get(tancd, ""),
+                          amount=num(d.get("AMOUNT")), breakdown=breakdown))
+    return lines
+
+
+def breakdown_text(breakdowns):
+    """集約備考。明細を , でつなぎ、BREAKDOWN_PER_LINE 件ごとに改行する（行末の , は残す）"""
+    lines = [BREAKDOWN_SEP.join(breakdowns[i:i + BREAKDOWN_PER_LINE])
+             for i in range(0, len(breakdowns), BREAKDOWN_PER_LINE)]
+    return (BREAKDOWN_SEP.rstrip() + "\n").join(lines)
+
+
+def aggregate_row(agg_no, members):
+    """集約1件 → 1行。rBOM 由来の値は全員同じはずなので、違えば / でつなぐ"""
+    def col(name):
+        return [m[name] for m in members]
+
+    qty = next((m["agg_qty"] for m in members if m["agg_qty"] is not None), None)
+    if qty is None:
+        qty = sum(m["thqty"] or 0 for m in members)
+    price = join_number(col("price"))
+    amount = next((m["agg_amount"] for m in members if m["agg_amount"] is not None), None)
+    if amount is None and isinstance(price, (int, float)) and qty is not None:
+        amount = price * qty
+        amount = int(amount) if float(amount).is_integer() else amount
+    prndts = [p for p in col("prndt") if p]
+    return {
+        "注文書発行区分": "発行済", "発注番号": agg_no,
+        "品目ｺｰﾄﾞ": join_unique(col("hmcd")), "発注数": qty,
+        "希望納期": next((m["agg_due"] for m in members if m["agg_due"]), ""),
+        "単価": price, "工程ｺｰﾄﾞ": join_unique(col("ktcd")), "備考": join_unique(col("line_note")),
+        "金額": amount, "品名": join_unique(col("hmnm")),
+        "回答納期": "",   # 集約は回答納期を持てないので空欄（利用者の指定 2026-10-27）
+        "注文書発行日": join_unique(col("prndt")), "担当者略称": join_unique(col("tanrnm")),
+        # 明細は発注番号 → 行番号の順（members はその順に並んでいる）
+        "集約備考": breakdown_text(col("breakdown")),
+        "_srcd": members[0]["srcd"], "_sort_date": min(prndts) if prndts else "",
+        "_missing": not any(m["found"] for m in members),
+        "_sort_lineno": 1,
+    }
+
+
+def single_row(m):
+    """集約でない発注明細 → 1行"""
+    return {
+        "注文書発行区分": PRNKBN_TEXT.get(m["prnkbn"], m["prnkbn"]), "発注番号": m["pono"],
+        "品目ｺｰﾄﾞ": m["hmcd"], "発注数": m["thqty"], "希望納期": m["agg_due"] or m["drvdt"],
+        "単価": m["price"], "工程ｺｰﾄﾞ": m["ktcd"], "備考": m["line_note"], "金額": m["amount"],
+        "品名": m["hmnm"], "回答納期": m["recdt"], "注文書発行日": m["prndt"],
+        "担当者略称": m["tanrnm"], "集約備考": "",
+        "_srcd": m["srcd"], "_sort_date": m["prndt"], "_sort_lineno": m["lineno"],
+        "_missing": not m["found"],
+    }
+
+
+# 並び順（利用者の指定 2026-10-27）: 注文書発行日 → 発注番号 → 行番号 の昇順。
+# 集約の行の注文書発行日は、明細のうちいちばん古い日で比べる。
+# rBOM に無い明細（注文書発行日などが空欄）は先頭に来てしまうので、いちばん最後に回す
+def sort_key(row):
+    return (row["_missing"], row["_sort_date"], row["発注番号"], row["_sort_lineno"])
+
+
+# ---------------------------------------------------------------------------
+# 4. Excel を作る（仕入先ごとに1ファイル）
+# ---------------------------------------------------------------------------
+INVALID_CHARS = re.compile(r'[\\/:*?"<>|\[\]]')
+
+
+def safe_name(s):
+    return INVALID_CHARS.sub("_", re.sub(r"\s+", "_", s.strip()))
+
+
+# 罫線: 見出し行と表全体の外枠は実線（細）、表の中の縦線・横線は Excel 標準のいちばん細い線（hair）
+SOLID = Side(style="thin")
+HAIR = Side(style="hair")
+
+
+def draw_borders(ws, last_row, last_col):
+    for r in range(1, last_row + 1):
+        for c in range(1, last_col + 1):
+            header = r == 1
+            ws.cell(row=r, column=c).border = Border(
+                top=SOLID if r <= 2 else HAIR,              # 見出しの上下は実線
+                bottom=SOLID if header or r == last_row else HAIR,
+                left=SOLID if header or c == 1 else HAIR,   # 見出し行は縦線も実線
+                right=SOLID if header or c == last_col else HAIR,
+            )
+
+
+def display_width(v):
+    """Excel の列幅の目安。全角（漢字・かな）は2、半角（ｶﾅ含む）は1で数える。
+    セル内で改行しているときは、いちばん長い行の幅"""
+    return max(sum(2 if unicodedata.east_asian_width(ch) in "WFA" else 1 for ch in line)
+               for line in text(v).split("\n"))
+
+
+def fit_widths(headers, rows):
+    """列幅を見出しと中身のいちばん長いものに合わせる（FIXED_WIDTHS の列は固定幅）"""
+    widths = []
+    for h in headers:
+        if h in FIXED_WIDTHS:
+            widths.append(FIXED_WIDTHS[h])
+            continue
+        longest = max([display_width(h) + 1] + [display_width(row.get(h)) for row in rows])  # 見出しは太字のぶん+1
+        widths.append(longest + 2)
+    return widths
+
+
+def build_book(sheet_title, rows):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = safe_name(sheet_title)[:31] or "発注一覧"
+    headers = list(OUTPUT_COLUMNS)
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for row in rows:
+        ws.append([row.get(h) for h in headers])
+        for col, h in enumerate(headers, start=1):
+            cell = ws.cell(row=ws.max_row, column=col)
+            if h not in NUMBER_COLUMNS:
+                cell.number_format = "@"
+            if h in WRAP_COLUMNS:
+                # セル内の改行を表示する（行の高さは Excel が開いたときに合わせる）
+                cell.alignment = Alignment(wrap_text=True)
+    for i, width in enumerate(fit_widths(headers, rows), start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"
+    draw_borders(ws, len(rows) + 1, len(headers))
+
+    # 印刷: 横向き・余白小・横は1ページ（縦は何ページでもよい）・見出しを全ページに
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_margins.left = ws.page_margins.right = 0.2
+    ws.page_margins.top = 0.5      # 上だけ少し広め
+    ws.page_margins.bottom = 0.3
+    ws.page_margins.header = ws.page_margins.footer = 0.1
+    ws.print_title_rows = "1:1"
+    ws.print_options.horizontalCentered = True   # ページ中央（水平）に寄せる
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+async def convert(data, progress=None):
+    def report(msg):
+        if progress is not None:
+            progress(msg)
+
+    log = []
+    report("Excel を読み込み中…")
+    records = read_source(data, log)
+    if not records:
+        raise ValueError("発注番号・行番号の入った行がありません")
+
+    d3340, d3330, d3010, m0540, m0710 = await fetch_rbom(records, report)
+    report("Excel を作成中…")
+    lines = build_lines(records, d3340, d3330, d3010, m0540)
+
+    not_found = [f"{m['pono']}+{m['lineno']:03d}" for m in lines if not m["found"]]
+    if not_found:
+        log.append(f"⚠ rBOM に無い発注明細が {len(not_found)} 件あります（rBOM の項目は空欄）: "
+                   + "、".join(not_found[:10]) + (" …" if len(not_found) > 10 else ""))
+
+    groups = {}
+    out_rows = []
+    for m in lines:
+        if m["agg_no"]:
+            groups.setdefault(m["agg_no"], []).append(m)
+        else:
+            out_rows.append(single_row(m))
+    for agg_no, members in groups.items():
+        row = aggregate_row(agg_no, members)
+        for name in ("品目ｺｰﾄﾞ", "工程ｺｰﾄﾞ", "単価", "品名"):
+            if JOIN_SEP in text(row[name]):
+                log.append(f"⚠ 集約 {agg_no} の{name}が明細ごとに違います（{row[name]}）")
+        out_rows.append(row)
+    out_rows.sort(key=sort_key)
+    log.append(f"出力: {len(out_rows)} 行（集約 {len(groups)} 件 / 集約でない発注 {len(out_rows) - len(groups)} 件）")
+
+    by_vendor = {}
+    for row in out_rows:
+        by_vendor.setdefault(row["_srcd"], []).append(row)
+
+    files = []
+    for srcd in sorted(by_vendor):
+        rows = by_vendor[srcd]
+        vname = m0710.get(srcd, "")
+        base = "発注一覧_担当G_" + safe_name("_".join(p for p in (srcd or "仕入先なし", vname) if p))
+        files.append({"name": base + ".xlsx", "label": f"{srcd} {vname}（{len(rows)}行）".strip(),
+                      "count": len(rows), "data": build_book(srcd or "仕入先なし", rows)})
+    log.append(f"仕入先: {len(files)} 件")
+
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            z.writestr(f["name"], f["data"])
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return {"log": log, "files": files,
+            "zip": {"name": f"発注一覧_担当G_{stamp}.zip", "data": zbuf.getvalue()}}
+</script>
+
+<script>
+function app() {
+    return {
+        ready: false,
+        busy: false,
+        file: null,
+        dragOver: false,
+        error: '',
+        progress: '',
+        messages: [],
+        files: [],
+        zip: null,
+        pyodide: null,
+
+        // Alpine が x-data の init() を自動で呼ぶ。x-init でも呼ぶと二重に初期化されるので付けないこと
+        async init() {
+            try {
+                const py = await loadPyodide();
+                // loadPackage は失敗しても例外を投げずコンソールに出すだけなので、エラーを拾って投げ直す
+                const loadErrors = [];
+                await py.loadPackage('micropip', { errorCallback: (msg) => loadErrors.push(msg) });
+                if (loadErrors.length) throw new Error(loadErrors.join('\n'));
+                // openpyxl は Pyodide の配布物に無いため PyPI から取る
+                await py.runPythonAsync(`
+import micropip
+await micropip.install('openpyxl')
+`);
+                py.runPython(document.getElementById('py-convert').textContent);
+                this.pyodide = py;
+                this.ready = true;
+            } catch (e) {
+                this.error = '変換エンジンの読み込みに失敗しました: ' + e;
+            }
+        },
+
+        onFile(ev) {
+            this.setFile(ev.target.files[0] || null);
+        },
+
+        onDrop(ev) {
+            this.dragOver = false;
+            if (!this.ready || this.busy) return;
+            const f = ev.dataTransfer.files[0];
+            if (!f) return;
+            if (!/\.xlsx$/i.test(f.name)) {
+                this.error = '.xlsx ファイルを指定してください: ' + f.name;
+                return;
+            }
+            this.$refs.fileInput.value = '';
+            this.setFile(f);
+        },
+
+        setFile(f) {
+            this.file = f;
+            this.error = '';
+            this.messages = [];
+            this.files = [];
+            this.zip = null;
+        },
+
+        async convert() {
+            this.busy = true;
+            this.error = '';
+            this.messages = [];
+            this.files = [];
+            this.zip = null;
+            let result = null;
+            try {
+                const buf = new Uint8Array(await this.file.arrayBuffer());
+                result = await this.pyodide.globals.get('convert')(buf, (msg) => { this.progress = msg; });
+                const out = result.toJs({ dict_converter: Object.fromEntries });
+                this.messages = Array.from(out.log);
+                this.files = Array.from(out.files);
+                this.zip = out.zip;
+            } catch (e) {
+                // Pythonの例外はトレースバックの最終行だけを見せる
+                const lines = String(e.message || e).trim().split('\n');
+                this.error = '変換に失敗しました: ' + lines[lines.length - 1];
+            } finally {
+                if (result) result.destroy();
+                this.busy = false;
+                this.progress = '';
+            }
+        },
+
+        download(bytes, name) {
+            const blob = new Blob([bytes], { type: /\.zip$/i.test(name) ? 'application/zip'
+                : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        },
+    };
+}
+</script>
+</body>
+</html>
