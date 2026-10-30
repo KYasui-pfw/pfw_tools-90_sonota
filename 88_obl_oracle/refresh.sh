@@ -235,7 +235,13 @@ find dmp  -name 'impdp_*.log'   -mtime +60 -delete 2>/dev/null   # impdp のロ�
 # 9) 図面一覧の出力（ファイルサーバーとの突合用）
 #    \esrv11\output\obbligate_copy\obbligate_all_zumen.csv として参照できる。
 #
-#    抽出条件は 90_temp/99_tmp/08_obli/09_export_copy_target.py と同じ。
+#    抽出条件は 90_temp/99_tmp/08_obli/09_export_copy_target.py から移植した
+#    （元スクリプトは 2026-10-30 時点でローカルに見当たらない）。品番の版の選び方だけは下記のとおり変えている。
+#      - 品番の版は「Approved のうち VERSION 最大」かつ有効期限なし（TO_DATE=0）の版。
+#        以前は「最新版（LAST/ALONE）が Approved」だったため、改版中（最新版が InWork /
+#        InApprove 等）の品番は承認されるまで行がまるごと消えていた（2026-10-26 に 189品番。
+#        図番マクロの DK図から 26DKM043 が抜けた）。いまは改版中も一つ前の承認済み版の図面を出す
+#      - 最新版が Disposed（廃止）の品番は出さない
 #      - CADネイティブ（DOCUMENT_ENTRY.FILE_NAME）の拡張子が mi / tif であること
 #        ＝ファイルサーバーへコピーされる図面。索引JSONとの突合で再現率100%だった。
 #        pdf / xlsx / jpg などは一切コピーされないので拾わない
@@ -273,9 +279,13 @@ SELECT
     d.document_number || LPAD(dv.revision, 2, '0'),
     TO_CHAR(DATE '1970-01-01' + de.file_modify_date / 86400, 'YYYY-MM-DD')
 FROM       obl.part                  p
-JOIN       obl.part_version          pv  ON pv.super_identification = p.identification
-                                        AND pv.lifecycle_state_name = 'Approved'
-                                        AND pv.version_mark IN ('LAST','ALONE')
+JOIN       (SELECT identification, super_identification, name, to_date,
+                   ROW_NUMBER() OVER (PARTITION BY super_identification
+                                          ORDER BY version DESC) AS rn
+              FROM obl.part_version
+             WHERE lifecycle_state_name = 'Approved') pv
+                                         ON pv.super_identification = p.identification
+                                        AND pv.rn = 1
                                         AND pv.to_date = 0
 JOIN       obl.part_version_document pvd ON pvd.plus_identification = pv.identification
 JOIN       obl.document_version      dv  ON dv.identification       = pvd.minus_identification
@@ -284,6 +294,10 @@ JOIN       obl.document_version      dv  ON dv.identification       = pvd.minus_
 JOIN       obl.document              d   ON d.identification        = dv.super_identification
 JOIN       obl.document_entry        de  ON de.super_identification = dv.identification
 WHERE LOWER(SUBSTR(de.file_name, INSTR(de.file_name, '.', -1) + 1)) IN ('mi','tif')
+  AND NOT EXISTS (SELECT 1 FROM obl.part_version x
+                   WHERE x.super_identification = p.identification
+                     AND x.version_mark IN ('LAST','ALONE')
+                     AND x.lifecycle_state_name = 'Disposed')
 ORDER BY p.part_number, d.document_number;
 EXIT
 SQL

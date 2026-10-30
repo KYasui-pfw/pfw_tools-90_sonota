@@ -92,7 +92,7 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 | 列 | 内容 |
 |---|---|
 | PART_NUMBER / PART_NAME | 品番・品名（`part.part_number` / `part.name`） |
-| PART_VERSION_NAME | 版の品名（`part_version.name`。Approved の最新版）。PART_NAME とは別に並べて出す |
+| PART_VERSION_NAME | 版の品名（`part_version.name`。Approved のうち VERSION 最大の版）。PART_NAME とは別に並べて出す |
 | DOCUMENT_NUMBER | 図番 |
 | DOCUMENT_NAME | 図面名（`document.name`） |
 | VER / REV | 版数・改訂 |
@@ -100,9 +100,24 @@ fsrv24 //172.17.22.102/Obbligato_Backup  →  /mnt/fsrv24/obl_dmp（ro でマウ
 | FILE_BASE | **図番 + REVISION 2桁**（`VERSION` ではない。拡張子なし） |
 | FILE_MODIFIED_ON | `document_entry.file_modify_date`（UNIX秒）を `YYYY-MM-DD` に |
 
-- **抽出条件は `90_temp/99_tmp/08_obli/09_export_copy_target.py` と同じ**
-  （CADネイティブが `mi` / `tif`。ライフサイクルでは絞らず InWork も含める）。
-  条件を変えるときは両方を見比べること
+- **抽出条件は `90_temp/99_tmp/08_obli/09_export_copy_target.py` から移植したもの**
+  （CADネイティブが `mi` / `tif`。文書版のライフサイクルでは絞らず InWork も含める）。
+  ⚠ 元スクリプトは 2026-10-30 時点でローカルに見当たらない（`08_obli/` ごと無い）。
+  品番の版の選び方は下記のとおり 2026-10-30 に変えたので、元スクリプトとはそこが違う
+- **品番の版は「Approved のうち VERSION 最大」かつ `to_date = 0` の版を採る**（`ROW_NUMBER()` で1品番1版）。
+  ⚠ 以前は「最新版（`version_mark` が LAST/ALONE）が Approved」を条件にしていたため、
+  **改版中（最新版が InWork / InApprove 等）の品番は承認されるまで行がまるごと消えていた。**
+  Obbligato のダンプは 12:30 に取られるので、午前に改版して午後に承認すると、その日の一覧からだけ消える。
+  2026-10-26 には 189品番が消え、図番マクロ（`90_temp/90_マクロ調査/図番_RevB.xlsm`）の DK図から
+  26DKM043 が抜けた。いまは改版中も一つ前の承認済み版の図面を出す（切り替え時点で 21品番・70行が増え、減った行は0）
+- **`part_version.to_date` は有効期限**（UNIX秒・0＝期限なし）。有効開始日を指定して改版すると、
+  前の版に「新しい版の開始日の前日」が入る。期限付きの版は以前から出していないので、その扱いは変えていない
+  （改版中の品番 217件のうち 99件は、一つ前の承認済み版に期限が付いているため今も出ない）
+- **最新版が Disposed（廃止）の品番は出さない**（`NOT EXISTS`）。2026-10-30 時点の 11件は
+  どれも承認済みの版を持たないので結果は変わらないが、一つ前の版に戻って廃止品が出るのを防ぐ
+- 文書版は今までどおり「最新版（LAST/ALONE）かつ `revision IS NOT NULL`」。
+  最新の文書版の revision が NULL で、それより前に revision のある版がある文書は 0件（2026-10-30 確認）なので、
+  文書側で同じ消え方は起きない
 - ⚠ **列を絞っても行は重複しない**ため `DISTINCT` は付けていない（実測で 242,220 = 242,220）。
   FILE_BASE 自体は 81,292 種類で、同じ図面が複数の品番から参照されるぶん行が増える
 - **UTF-8 BOM 付き・CRLF**（Excel でそのまま開ける。Python は `encoding="utf-8-sig"`）
