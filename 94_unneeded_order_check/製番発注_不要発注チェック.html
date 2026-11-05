@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>製番発注_不要発注チェック</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/dist/ag-grid-community.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+:root {
+    --pico-font-family: "Noto Sans JP", sans-serif;
+    --pico-font-size: 85%;
+    --pico-spacing: 0.5rem;
+    --pico-border-radius: 0;
+}
+body { font-family: "Noto Sans JP", sans-serif; }
+body > header { background: #1f3a5f; color: #fff; padding: 0.6rem 1rem; margin-bottom: 1rem;
+                display: flex; justify-content: space-between; align-items: center; }
+body > header h1 { color: #fff; font-size: 1.2rem; margin: 0; }
+.cond-btn { margin: 0; width: auto; padding: 0.15rem 0.6rem; font-size: 0.8rem;
+            color: #fff; border-color: rgba(255, 255, 255, 0.7); background: transparent; }
+.cond-btn:hover { background: rgba(255, 255, 255, 0.15); color: #fff; border-color: #fff; }
+main.container-fluid { padding: 0 1rem; }
+main > article { margin-bottom: 0.5rem; padding: 0.75rem 1rem; }
+.status { font-size: 0.9rem; color: var(--pico-muted-color); }
+dialog article { max-width: 640px; font-size: 0.9rem; }
+dialog ol { padding-left: 1.25rem; }
+dialog li { margin-bottom: 0.5rem; }
+.cond { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; }
+.cond .grp { display: flex; align-items: flex-end; gap: 0.25rem; width: auto; flex: none; }
+.cond label { margin: 0; font-size: 0.8rem; display: flex; align-items: center; gap: 0.2rem; }
+.cond input:not([type=checkbox]) { width: 4.5rem; margin: 0; padding: 0.2rem 0.4rem; height: auto; }
+.cond input.y { width: 6.5rem; }
+.cond .sep { padding: 0 0.25rem 0.6rem; }
+.cond button { margin: 0; width: auto; padding: 0.3rem 1.25rem; }
+/* 検索ボタンと「全項目表示」を横並びにし、ボタンの高さの中央にそろえる。間に薄い縦線 */
+.cond .actions { display: flex; align-items: center; }
+.cond label.show-all { margin-left: 0.75rem; padding-left: 0.75rem; border-left: 1px solid var(--pico-muted-border-color);
+                       line-height: 1.8; font-size: 0.9rem; cursor: pointer; }
+.cond label.show-all input[type=checkbox] { width: 1.25em; height: 1.25em; flex: none; margin: 0 0.3rem 0 0; }
+.legend { font-size: 0.8rem; font-weight: 700; margin-bottom: 0.15rem; }
+.msg { margin: 0.25rem 0 0.5rem; font-size: 0.9rem; }
+.msg.err { color: #c62828; }
+.msg.warn { color: #e65100; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; }
+.toolbar button { margin: 0; width: auto; padding: 0.25rem 0.75rem; }
+#grid { height: calc(100vh - 190px); min-height: 300px; width: 100%; }
+</style>
+</head>
+<body>
+<header>
+    <h1>製番発注_不要発注チェック</h1>
+    <button class="outline cond-btn" onclick="document.getElementById('condDialog').showModal()">検索条件</button>
+</header>
+
+<dialog id="condDialog" onclick="if (event.target === this) this.close()">
+        <article>
+            <header>
+                <button aria-label="閉じる" rel="prev" onclick="document.getElementById('condDialog').close()"></button>
+                <strong>検索条件</strong>
+            </header>
+            <p>製番発注のうち、部品表の上では「もう要らない」部品なのに、発注が残っているものを探します。</p>
+            <ol>
+                <li><b>製番を選ぶ</b><br>
+                    指定した月次（開始～終了）の製番のうち、<b>まだ完了していない製番</b>だけを対象にします。<br>
+                    <small>製番完了（D3030）にデータがある製番は、完了済みとして除きます。<br>
+                    在庫発注（ZAIKOSEIBAN）と経費・工具発注（KEIHI）は製番発注ではないため、対象外です。</small></li>
+                <li><b>部品表の最新版を見る</b><br>
+                    対象製番の部品表（D3110）は、改版するたびに同じリスト番号の行が増えていきます。
+                    そのため、<b>リスト番号ごとに訂番がいちばん大きい行（＝最新版）</b>だけを見ます。</li>
+                <li><b>「要らなくなった」部品を拾う</b><br>
+                    最新版で次のどちらかに当てはまる部品を拾います。
+                    <ul>
+                        <li>必要量が <b>0</b></li>
+                        <li>有効状態が <b>無効</b>（部品表から外された部品）</li>
+                    </ul></li>
+                <li><b>発注と突き合わせる</b><br>
+                    拾った部品のうち、同じ製番・リスト番号の<b>発注明細（D3340）があるもの</b>を一覧にします。<br>
+                    <small>発注の状態（未受入・完納など）では絞り込んでいません。必要に応じて一覧の列フィルターで絞ってください。</small></li>
+            </ol>
+            <p><small>月次は「年・月・次」をつなげた数字（例: 2026年11月1次 → 2026111）で範囲を指定します。
+                空欄にした側は範囲指定なし（両方空欄なら全期間）です。<br>
+                注文書の「発行済／未発行」は、発注ヘッダ（D3330）の注文書発行区分（2＝発行済、1＝未発行）で表示しています。</small></p>
+        </article>
+</dialog>
+
+<main class="container-fluid" x-data="app()">
+    <article>
+    <div class="cond">
+        <div class="grp">
+            <div>
+                <div class="legend">開始月次</div>
+                <div style="display:flex;gap:0.25rem;align-items:flex-end">
+                    <label>年<input class="y" type="number" x-model.number="fromY" min="2000" max="2099"></label>
+                    <label>月<input type="number" x-model.number="fromM" min="1" max="12"></label>
+                    <label>次<input type="number" x-model.number="fromC" min="0" max="9"></label>
+                </div>
+            </div>
+        </div>
+        <span class="sep">～</span>
+        <div class="grp">
+            <div>
+                <div class="legend">終了月次</div>
+                <div style="display:flex;gap:0.25rem;align-items:flex-end">
+                    <label>年<input class="y" type="number" x-model.number="toY" min="2000" max="2099"></label>
+                    <label>月<input type="number" x-model.number="toM" min="1" max="12"></label>
+                    <label>次<input type="number" x-model.number="toC" min="0" max="9"></label>
+                </div>
+            </div>
+        </div>
+        <div class="actions">
+            <button @click="search()" :aria-busy="loading" :disabled="loading">検索</button>
+            <label class="show-all"><input type="checkbox" x-model="showAll" @change="applyColumns()">全項目表示</label>
+        </div>
+    </div>
+
+    <div class="msg err" x-show="error" x-text="error"></div>
+    <div class="msg warn" x-show="warning" x-text="warning"></div>
+    </article>
+
+    <div class="toolbar">
+        <span x-text="summary"></span>
+        <button class="secondary" @click="exportCsv()" :disabled="rowCount === 0">CSV出力</button>
+    </div>
+    <div id="grid" class="ag-theme-quartz"></div></main>
+
+<script>
+const API_URL = "http://pfw-api/sql";
+const API_KEY = "oG5^Ls%#20yq";
+const HEADERS = { "X-API-KEY": API_KEY, "Content-Type": "application/json" };
+const MAX_ROWS = 100000;
+
+// D3110 は (SEINO, LISTNO, VERNO) が一意。SEINO+LISTNO ごとに VERNO 最大の1行を「最新版」とする
+const SQL = `
+WITH S AS (
+  SELECT s.SEINO, s.GETSUJI, s.HMCD, s.HMNM, s.SPPLDT
+  FROM D3010 s
+  WHERE (:getsuji_from IS NULL OR s.GETSUJI >= :getsuji_from)
+    AND (:getsuji_to IS NULL OR s.GETSUJI <= :getsuji_to)
+    -- 在庫発注・経費工具発注は製番発注ではないので対象外（D3110 に QTY=0 の行が1つだけあり、全発注が拾われてしまう）
+    AND s.SEINO NOT IN ('ZAIKOSEIBAN', 'KEIHI')
+    AND NOT EXISTS (SELECT 1 FROM D3030 c WHERE c.SEINO = s.SEINO)
+),
+B AS (
+  SELECT b.SEINO, b.LISTNO, b.VERNO, b.VALFLG, b.STATUS, b.QTY,
+         ROW_NUMBER() OVER (PARTITION BY b.SEINO, b.LISTNO ORDER BY b.VERNO DESC) RN
+  FROM D3110 b
+  WHERE b.SEINO IN (SELECT SEINO FROM S)
+)
+SELECT S.GETSUJI, S.SEINO, S.HMCD AS SEI_HMCD, S.HMNM AS SEI_HMNM, S.SPPLDT,
+       B.LISTNO, B.VERNO AS BOM_VERNO, B.VALFLG, B.QTY AS BOM_QTY, B.STATUS AS BOM_STATUS,
+       p.PONO, p.LINENO, p.HMCD, p.HMNM, p.KTCD, p.THQTY,
+       (SELECT SUM(r.RCVQTY) FROM D3360 r WHERE r.PONO = p.PONO AND r.LINENO = p.LINENO) AS RCVQTY,
+       p.DRVDT, p.STATUS AS PO_STATUS, p.AMOUNT,
+       -- 注文書の発行はヘッダ D3330 で判定する（D3340.PRNKBN は全行 '1' のまま更新されない）
+       h.PRNKBN, h.PRNDT, h.PODT, h.SRCD, v.HTRNM1 AS SRNM, h.TANCD, t.TANNM
+FROM S
+JOIN B ON B.SEINO = S.SEINO AND B.RN = 1 AND (B.QTY = 0 OR B.VALFLG = '2')
+JOIN D3340 p ON p.SEINO = B.SEINO AND p.LISTNO = B.LISTNO
+LEFT JOIN D3330 h ON h.PONO = p.PONO
+LEFT JOIN M0710 v ON v.HTRCD = h.SRCD
+LEFT JOIN M0540 t ON t.TANCD = h.TANCD
+ORDER BY S.GETSUJI, S.SEINO, B.LISTNO, p.PONO, p.LINENO
+`;
+
+const PO_STATUS_TEXT = { "2": "未受入", "3": "一部完納", "4": "完納", "8": "強制完納", "9": "中止" };
+const VALFLG_TEXT = { "1": "有効", "2": "無効" };
+const PRNKBN_TEXT = { "1": "未発行", "2": "発行済" };
+
+const AG_GRID_LOCALE_JA = {
+    filterOoo: 'フィルター...', empty: '選択してください',
+    equals: '等しい', notEqual: '等しくない', blank: '空白である', notBlank: '空白ではない',
+    contains: '含む', notContains: '含まない', startsWith: 'で始まる', endsWith: 'で終わる',
+    lessThan: 'より小さい (<)', greaterThan: 'より大きい (>)', lessThanOrEqual: '以下 (<=)', greaterThanOrEqual: '以上 (>=)',
+    inRange: '範囲内', inRangeStart: 'から', inRangeEnd: 'まで',
+    andCondition: 'AND（かつ）', orCondition: 'OR（または）',
+    noRowsToShow: '条件に一致するデータがありません', loadingOoo: '読み込み中...',
+    pinColumn: '列を固定', pinLeft: '左に固定', pinRight: '右に固定', noPin: '固定解除',
+    autosizeThiscolumn: 'この列幅を自動調整', autosizeAllColumns: '全列幅を自動調整',
+    resetColumns: '列の設定をリセット', resetFilter: 'フィルターをリセット'
+};
+
+// "2026-11-02T00:00:00" → "2026/11/02"
+const fmtDate = (v) => (v ? String(v).slice(0, 10).replace(/-/g, "/") : "");
+const withText = (map) => (p) => (p.value == null ? "" : (map[p.value] ? `${p.value}:${map[p.value]}` : p.value));
+const fmtNum = (p) => (p.value == null ? "" : Number(p.value).toLocaleString("ja-JP"));
+
+const columnDefs = [
+    { headerName: "月次", field: "GETSUJI", width: 90, pinned: "left" },
+    { headerName: "製番", field: "SEINO", width: 120, pinned: "left" },
+    { headerName: "製番品名", field: "SEI_HMNM", width: 160 },
+    { headerName: "出荷予定日", field: "SPPLDT", width: 120, valueFormatter: (p) => fmtDate(p.value) },
+    { headerName: "リスト番号", field: "LISTNO", width: 230 },
+    { headerName: "部品表訂番", field: "BOM_VERNO", width: 130, type: "numericColumn" },
+    { headerName: "部品表有効", field: "VALFLG", width: 130, valueFormatter: withText(VALFLG_TEXT) },
+    { headerName: "部品表状態", field: "BOM_STATUS", width: 130 },
+    { headerName: "発注番号", field: "PONO", width: 110 },
+    { headerName: "行", field: "LINENO", width: 65, type: "numericColumn" },
+    { headerName: "品目コード", field: "HMCD", width: 150 },
+    { headerName: "品名", field: "HMNM", width: 170 },
+    { headerName: "工程", field: "KTCD", width: 95 },
+    { headerName: "部品表数量", field: "BOM_QTY", width: 130, type: "numericColumn", valueFormatter: fmtNum },
+    { headerName: "発注数", field: "THQTY", width: 90, type: "numericColumn", valueFormatter: fmtNum },
+    { headerName: "受入数", field: "RCVQTY", width: 90, type: "numericColumn", valueFormatter: fmtNum },
+    { headerName: "発注状態", field: "PO_STATUS", width: 110, valueFormatter: withText(PO_STATUS_TEXT) },
+    { headerName: "注文書", field: "PRNKBN", width: 95, valueFormatter: withText(PRNKBN_TEXT) },
+    { headerName: "注文書発行日", field: "PRNDT", width: 145, valueFormatter: (p) => fmtDate(p.value) },
+    { headerName: "金額", field: "AMOUNT", width: 100, type: "numericColumn", valueFormatter: fmtNum },
+    { headerName: "発注日", field: "PODT", width: 110, valueFormatter: (p) => fmtDate(p.value) },
+    { headerName: "希望納期", field: "DRVDT", width: 110, valueFormatter: (p) => fmtDate(p.value) },
+    { headerName: "仕入先CD", field: "SRCD", width: 120 },
+    { headerName: "仕入先名", field: "SRNM", width: 180 },
+    { headerName: "担当者CD", field: "TANCD", width: 120 },
+    { headerName: "担当者", field: "TANNM", width: 110 },
+];
+
+// 「全表示」のチェックが無いときに出す列（並びは columnDefs の順）
+const BASIC_FIELDS = [
+    "GETSUJI", "SEINO", "PONO", "HMCD", "HMNM", "KTCD", "BOM_QTY", "THQTY", "RCVQTY",
+    "PO_STATUS", "PRNKBN", "PRNDT", "SRCD", "TANCD",
+];
+columnDefs.forEach((c) => { c.hide = !BASIC_FIELDS.includes(c.field); });
+
+let gridApi = null;
+
+function app() {
+    return {
+        // 空欄 = その側の範囲指定なし（両方空欄なら全件）
+        fromY: "", fromM: "", fromC: "",
+        toY: "", toM: "", toC: "",
+        loading: false,
+        error: "",
+        warning: "",
+        summary: "",
+        lastRange: "",
+        rowCount: 0,
+        showAll: false,
+
+        // 全表示 ON → 全列 / OFF → BASIC_FIELDS の列だけ（CSV出力も表示中の列だけになる）
+        applyColumns() {
+            const others = columnDefs.map((c) => c.field).filter((f) => !BASIC_FIELDS.includes(f));
+            gridApi.setColumnsVisible(others, this.showAll);
+        },
+
+        init() {
+            gridApi = agGrid.createGrid(document.getElementById("grid"), {
+                columnDefs,
+                rowData: [],
+                defaultColDef: { sortable: true, filter: true, resizable: true },
+                localeText: AG_GRID_LOCALE_JA,
+                enableCellTextSelection: true,
+                rowHeight: 28,
+                headerHeight: 32,
+                onFilterChanged: () => this.updateSummary(),
+            });
+            // 件数が少ないので、開いたときに全期間で検索して表示しておく
+            this.search();
+        },
+
+        // 3つとも空欄 → null（範囲指定なし）／正しい入力 → 数値／それ以外 → undefined（入力エラー）
+        getsuji(yy, mm, cc) {
+            const vals = [yy, mm, cc];
+            const blank = (v) => v === "" || v == null;
+            if (vals.every(blank)) return null;
+            if (!vals.every(Number.isInteger)) return undefined;
+            if (yy < 2000 || yy > 2099 || mm < 1 || mm > 12 || cc < 0 || cc > 9) return undefined;
+            return yy * 1000 + mm * 10 + cc;   // 例: 2026年11月1次 → 2026111
+        },
+
+        async search() {
+            this.error = "";
+            this.warning = "";
+            const from = this.getsuji(this.fromY, this.fromM, this.fromC);
+            const to = this.getsuji(this.toY, this.toM, this.toC);
+            if (from === undefined || to === undefined) {
+                this.error = "月次は年・月・次の3つすべてを入力するか、すべて空欄にしてください（年: 2000～2099 / 月: 1～12 / 次: 0～9）";
+                return;
+            }
+            if (from != null && to != null && from > to) {
+                this.error = "開始月次が終了月次より後になっています";
+                return;
+            }
+
+            this.loading = true;
+            gridApi.setGridOption("rowData", []);
+            gridApi.showLoadingOverlay();
+            try {
+                const res = await fetch(API_URL, {
+                    method: "POST",
+                    headers: HEADERS,
+                    body: JSON.stringify({
+                        sql: SQL,
+                        params: { getsuji_from: from, getsuji_to: to },
+                        max_rows: MAX_ROWS,
+                    }),
+                });
+                if (!res.ok) {
+                    let detail = "";
+                    try { detail = (await res.json()).detail; } catch (e) { /* 本文なし */ }
+                    throw new Error(`APIエラー: ${res.status} ${detail || ""}`);
+                }
+                const data = await res.json();
+                gridApi.setGridOption("rowData", data.rows);
+                if (data.truncated) {
+                    this.warning = `件数が上限（${MAX_ROWS.toLocaleString()}件）を超えたため、一部のみ表示しています。月次の範囲を狭めてください。`;
+                }
+                this.lastRange = (from == null && to == null)
+                    ? "全期間"
+                    : `${from ?? "指定なし"} ～ ${to ?? "指定なし"}`;
+                this.updateSummary();
+            } catch (e) {
+                this.error = `検索に失敗しました: ${e.message}`;
+                this.summary = "";
+                this.rowCount = 0;
+            } finally {
+                gridApi.hideOverlay();
+                if (gridApi.getDisplayedRowCount() === 0) gridApi.showNoRowsOverlay();
+                this.loading = false;
+            }
+        },
+
+        updateSummary() {
+            let total = 0;
+            gridApi.forEachNode(() => total++);
+            const shown = gridApi.getDisplayedRowCount();
+            this.rowCount = shown;
+            if (!this.lastRange) return;
+            this.summary = shown === total
+                ? `月次 ${this.lastRange}：${total.toLocaleString()} 件`
+                : `月次 ${this.lastRange}：${shown.toLocaleString()} 件表示 / 全 ${total.toLocaleString()} 件`;
+        },
+
+        exportCsv() {
+            const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+            gridApi.exportDataAsCsv({
+                fileName: `製番発注_不要発注チェック_${stamp}.csv`,
+                processCellCallback: (p) => {
+                    // 数値はカンマ区切りにせずそのまま出す（Excelで計算できるように）
+                    const def = p.column.getColDef();
+                    if (def.type === "numericColumn" || !def.valueFormatter || p.value == null) return p.value;
+                    return def.valueFormatter({ value: p.value });
+                },
+            });
+        },
+    };
+}
+</script>
+</body>
+</html>
