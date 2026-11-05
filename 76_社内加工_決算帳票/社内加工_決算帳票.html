@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>社内加工 決算帳票</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/styles/ag-grid.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/styles/ag-theme-quartz.css">
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/dist/ag-grid-community.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+:root {
+    --pico-font-family: "Noto Sans JP", sans-serif;
+    --pico-font-size: 85%;
+    --pico-spacing: 0.5rem;
+    --pico-border-radius: 0;
+}
+body { font-family: "Noto Sans JP", sans-serif; }
+body > header { background: #1f3a5f; color: #fff; padding: 0.6rem 1rem; margin-bottom: 1rem; }
+body > header h1 { color: #fff; font-size: 1.2rem; margin: 0; }
+main.container-fluid { padding: 0 1rem; }
+main > article { margin-bottom: 0.5rem; padding: 0.75rem 1rem; }
+.cond { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; }
+.cond .legend { font-size: 0.8rem; font-weight: 700; margin-bottom: 0.15rem; }
+.cond .ym { display: flex; gap: 0.25rem; align-items: flex-end; }
+.cond label { margin: 0; font-size: 0.8rem; display: flex; align-items: center; gap: 0.2rem; }
+.cond select { margin: 0; padding: 0.2rem 1.8rem 0.2rem 0.4rem; height: auto; width: auto; }
+.cond input[type=date] { margin: 0; padding: 0.2rem 0.4rem; height: auto; width: 10rem; }
+.cond .sep { padding: 0 0.25rem 0.4rem; }
+.cond .opt { margin-left: 1rem; padding-left: 1rem; border-left: 1px solid var(--pico-muted-border-color); }
+.groups { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem; }
+.groups .legend { font-size: 0.8rem; font-weight: 700; }
+.groups label { margin: 0; font-size: 0.9rem; cursor: pointer; }
+.groups button { margin: 0 0 0 1rem; width: auto; padding: 0.3rem 1.25rem; }
+.msg { margin: 0.25rem 0 0.5rem; font-size: 0.9rem; }
+.msg.err { color: #c62828; }
+.msg.warn { color: #e65100; }
+.status { font-size: 0.9rem; color: var(--pico-muted-color); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.25rem; }
+.toolbar button { margin: 0; width: auto; padding: 0.25rem 0.75rem; }
+.toolbar .caption { font-size: 0.85rem; color: var(--pico-muted-color); margin-left: 0.5rem; }
+#grid { height: calc(100vh - 290px); min-height: 300px; width: 100%; }
+</style>
+</head>
+<body>
+<header>
+    <h1>マシニング課　仕掛・完成一覧表</h1>
+</header>
+
+<main class="container-fluid" x-data="app()">
+    <article>
+        <!-- 月次範囲・完了日 -->
+        <div class="cond">
+            <div>
+                <div class="legend">開始</div>
+                <div class="ym">
+                    <label>年<select x-model="sy"><template x-for="y in years" :key="y"><option :value="y" x-text="y" :selected="y === sy"></option></template></select></label>
+                    <label>月<select x-model="sm"><template x-for="m in months" :key="m"><option :value="m" x-text="m" :selected="m === sm"></option></template></select></label>
+                    <label>次<select x-model="sx"><template x-for="j in jis" :key="j"><option :value="j" x-text="j" :selected="j === sx"></option></template></select></label>
+                </div>
+            </div>
+            <span class="sep">～</span>
+            <div>
+                <div class="legend">終了</div>
+                <div class="ym">
+                    <label>年<select x-model="ey"><template x-for="y in years" :key="y"><option :value="y" x-text="y" :selected="y === ey"></option></template></select></label>
+                    <label>月<select x-model="em"><template x-for="m in months" :key="m"><option :value="m" x-text="m" :selected="m === em"></option></template></select></label>
+                    <label>次<select x-model="ex"><template x-for="j in jis" :key="j"><option :value="j" x-text="j" :selected="j === ex"></option></template></select></label>
+                </div>
+            </div>
+            <div class="opt">
+                <div class="legend">オプション：完了日指定</div>
+                <input type="date" x-model="cutoff" @change="onCutoffChange()">
+            </div>
+        </div>
+
+        <!-- 区分（品目群） -->
+        <div class="groups">
+            <span class="legend">区分</span>
+            <template x-for="g in groupItems" :key="g.code">
+                <label><input type="checkbox" :value="g.code" x-model="selectedCodes"><span x-text="g.name"></span></label>
+            </template>
+            <span class="status" x-show="masterNote" x-text="masterNote"></span>
+            <button @click="run()" :aria-busy="loading" :disabled="loading || masterLoading">処理開始</button>
+        </div>
+
+        <p class="msg err" x-show="masterErr" x-text="'品目群マスタ取得エラー: ' + masterErr"></p>
+        <template x-for="e in errors" :key="e"><p class="msg err" x-text="e"></p></template>
+        <p class="status" x-show="progress" x-text="progress"></p>
+    </article>
+
+    <article x-show="hasResult">
+        <p class="status" x-show="hasResult && rowCount === 0">該当データがありません</p>
+        <div class="toolbar" x-show="rowCount > 0">
+            <button @click="downloadXlsx()" :disabled="xlsxBusy" :aria-busy="xlsxBusy">エクセルダウンロード</button>
+            <button class="secondary" @click="showDetail = true; $nextTick(() => renderGrid())">詳細表示</button>
+            <button class="outline" x-show="showDetail" @click="exportCsv()">CSV出力</button>
+            <span class="caption" x-text="caption"></span>
+        </div>
+        <div id="grid" class="ag-theme-quartz" x-show="showDetail && rowCount > 0"></div>
+    </article>
+</main>
+
+<script>
+const API_URL = "http://pfw-api/query";
+const API_KEY = "oG5^Ls%#20yq";
+const HEADERS = { "X-API-KEY": API_KEY, "Content-Type": "application/json" };
+const SQL_URL = "http://pfw-api/sql";
+const PAGE_LIMIT = 10000;
+const SQL_MAX_ROWS = 100000;   // /sql の上限。2か月分で約7千件
+
+const DISPLAY_GROUPS = ["生産機", "コンバージョン", "替釜", "部品注文", "整備機", "製作依頼"];
+const DEFAULT_CHECKED = ["生産機", "コンバージョン"];
+const LABEL_MAP = { "コンバージョン": "CONVERSION" };
+
+const AG_GRID_LOCALE_JA = {
+    filterOoo: 'フィルター...', empty: '選択してください',
+    equals: '等しい', notEqual: '等しくない', blank: '空白である', notBlank: '空白ではない',
+    contains: '含む', notContains: '含まない', startsWith: 'で始まる', endsWith: 'で終わる',
+    lessThan: 'より小さい (<)', greaterThan: 'より大きい (>)', lessThanOrEqual: '以下 (<=)', greaterThanOrEqual: '以上 (>=)',
+    inRange: '範囲内', inRangeStart: 'から', inRangeEnd: 'まで',
+    andCondition: 'AND（かつ）', orCondition: 'OR（または）',
+    noRowsToShow: '条件に一致するデータがありません', loadingOoo: '読み込み中...',
+    pinColumn: '列を固定', pinLeft: '左に固定', pinRight: '右に固定', noPin: '固定解除',
+    autosizeThiscolumn: 'この列幅を自動調整', autosizeAllColumns: '全列幅を自動調整',
+    resetColumns: '列の設定をリセット', resetFilter: 'フィルターをリセット'
+};
+
+// ---------------------------------------------------------------- API
+async function fetchAll(table, where, columns = null, onPage = null) {
+    const rows = [];
+    let offset = 0;
+    while (true) {
+        const payload = { table, limit: PAGE_LIMIT, offset };
+        if (where) payload.where = where;
+        if (columns) payload.columns = columns;
+        const res = await fetch(API_URL, { method: "POST", headers: HEADERS, body: JSON.stringify(payload) });
+        if (!res.ok) {
+            let detail = "";
+            try { detail = (await res.text()).slice(0, 300); } catch (e) { /* noop */ }
+            throw new Error(`${table} APIエラー: ${res.status} ${detail}`);
+        }
+        const batch = (await res.json()).rows || [];
+        rows.push(...batch);
+        if (onPage) onPage(rows.length);
+        if (batch.length < PAGE_LIMIT) break;
+        offset += PAGE_LIMIT;
+    }
+    return rows;
+}
+
+// SQL直接実行API（参照専用・読み取りキー）。JOIN・ウィンドウ関数を1本で実行できる
+async function fetchSql(sql, params) {
+    const res = await fetch(SQL_URL, {
+        method: "POST", headers: HEADERS,
+        body: JSON.stringify({ sql, params, max_rows: SQL_MAX_ROWS }),
+    });
+    if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.json()).detail || ""; } catch (e) { /* noop */ }
+        throw new Error(`SQL APIエラー: ${res.status} ${detail}`);
+    }
+    const data = await res.json();
+    if (data.truncated) throw new Error(`取得件数が上限（${SQL_MAX_ROWS.toLocaleString()}件）を超えました。条件を絞ってください`);
+    return data.rows || [];
+}
+
+// 仕掛・完成一覧の明細（元実装の D3010→D3420→D3110→D3430 の段階取得＋pandas結合を1本にしたもの）
+//   a: D3010 製番台帳（月次範囲・品目群）
+//   b: D3420 社内作業指示を SEINO で結合
+//   c: D3110 製番部品表。LISTNO ごとに VERNO 最大の1行のみ・その行の QTY=0 は除外
+//   d: D3430 工程完了。INDNO+LINENO ごとに INSTDT 最新の1行の KTEDDT
+//   納入先(SRCD)=40 の行のみ返す
+function buildDetailSql(codeCount) {
+    const gunIn = codeCount
+        ? ` AND HMGUNCD IN (${Array.from({ length: codeCount }, (_, i) => `:g${i}`).join(", ")})`
+        : "";
+    return `
+WITH a AS (
+    SELECT SEINO, GETSUJI, HMGUNCD, HMNM, INCH, GAUGE
+      FROM D3010
+     WHERE GETSUJI BETWEEN :s AND :e${gunIn}
+), b AS (
+    SELECT a.SEINO, a.GETSUJI, a.HMGUNCD, a.HMNM, a.INCH, a.GAUGE,
+           x.INDNO, x.LINENO, x.LISTNO, x.STATUS, x.KTCD
+      FROM a JOIN D3420 x ON x.SEINO = a.SEINO
+), c AS (
+    SELECT LISTNO, HMCD, SRCD FROM (
+        SELECT y.LISTNO, y.HMCD, y.SRCD, y.QTY,
+               ROW_NUMBER() OVER (PARTITION BY y.LISTNO ORDER BY y.VERNO DESC) rn
+          FROM D3110 y
+         WHERE y.LISTNO IN (SELECT LISTNO FROM b)
+    ) WHERE rn = 1 AND QTY <> 0
+), d AS (
+    SELECT INDNO, LINENO, KTEDDT FROM (
+        SELECT z.INDNO, z.LINENO, z.KTEDDT,
+               ROW_NUMBER() OVER (PARTITION BY z.INDNO, z.LINENO ORDER BY z.INSTDT DESC NULLS LAST) rn
+          FROM D3430 z
+         WHERE z.INDNO IN (SELECT INDNO FROM b)
+    ) WHERE rn = 1
+)
+SELECT b.SEINO, b.GETSUJI, b.HMGUNCD, b.HMNM, b.INCH, b.GAUGE,
+       b.INDNO, b.LINENO, b.LISTNO, b.STATUS, b.KTCD, c.HMCD, c.SRCD, d.KTEDDT
+  FROM b
+  JOIN c ON c.LISTNO = b.LISTNO
+  LEFT JOIN d ON d.INDNO = b.INDNO AND d.LINENO = b.LINENO
+ WHERE c.SRCD = '40'
+ ORDER BY b.SEINO, b.INDNO, b.LINENO`;
+}
+
+// ---------------------------------------------------------------- 値の正規化
+const isBlank = v => v === null || v === undefined || String(v).trim() === "";
+const str = v => isBlank(v) ? "" : String(v).trim();
+// 結合キー（LISTNO/LINENO）: 数値として読めるものは数値表記にそろえる（元実装の int(float(v)) 相当）
+function normKey(v) {
+    if (isBlank(v)) return null;
+    const s = String(v).trim();
+    const n = Number(s);
+    return Number.isFinite(n) ? String(Math.trunc(n)) : s;
+}
+// 数値の整形（30.0 → 30）
+function numclean(v) {
+    if (isBlank(v)) return "";
+    const n = Number(v);
+    return Number.isFinite(n) ? n : v;
+}
+// Oracle DATE（"2026-07-01T00:00:00" 等）→ Date（ローカル時刻）
+function toDate(v) {
+    if (isBlank(v)) return null;
+    const d = new Date(String(v).replace(" ", "T"));
+    return isNaN(d.getTime()) ? null : d;
+}
+function fmtDate(d) {
+    if (!d) return "";
+    const p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+}
+function firstVal(rows, col) {
+    for (const r of rows) if (!isBlank(r[col])) return r[col];
+    return "";
+}
+// 完了判定: STATUS=4 かつ（完了日指定なし or 完了日が未設定 or 完了日<=指定日）
+function isDone(r, cutoffDate) {
+    if (str(r.STATUS) !== "4") return false;
+    if (!cutoffDate) return true;
+    const k = toDate(r.KTEDDT);
+    return !k || k <= cutoffDate;
+}
+// "26071" → "7月1次"
+function jiLabel(g) {
+    const s = str(g);
+    if (s.length >= 5) {
+        const m = parseInt(s.slice(2, 4), 10), j = parseInt(s.slice(4), 10);
+        if (!isNaN(m) && !isNaN(j)) return `${m}月${j}次`;
+    }
+    return s;
+}
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+// ---------------------------------------------------------------- 帳票（xlsx）生成
+async function buildKessanXlsx(rows, codeToName, startGetsuji, endGetsuji, cutoffDate) {
+    const hasMaster = Object.keys(codeToName).length > 0;
+
+    // --- SEINO単位に集約（出現順） ---
+    const bySeino = new Map();
+    for (const r of rows) {
+        const k = r.SEINO;
+        if (!bySeino.has(k)) bySeino.set(k, []);
+        bySeino.get(k).push(r);
+    }
+    const agg = [];
+    for (const [seino, g] of bySeino) {
+        const total = g.length;
+        const done = g.filter(r => isDone(r, cutoffDate)).length;
+        const ratio = total ? Math.round(done / total * 100) / 100 : 0;
+        const gun = str(firstVal(g, "HMGUNCD"));
+        agg.push({
+            SEINO: str(seino),
+            GETSUJI: str(firstVal(g, "GETSUJI")),
+            HMNM: firstVal(g, "HMNM"),
+            INCH: numclean(firstVal(g, "INCH")),
+            GAUGE: numclean(firstVal(g, "GAUGE")),
+            GUNNM: hasMaster ? (codeToName[gun] ?? "その他") : "生産機",
+            RATIO: ratio,
+        });
+    }
+    const left = agg.filter(a => a.GUNNM === "生産機");
+    const right = agg.filter(a => a.GUNNM !== "生産機");
+
+    // --- 左ブロック：生産機を月次でグループ化 ---
+    const leftBlocks = [];
+    for (const getu of [...new Set(left.map(a => a.GETSUJI))].sort(cmp)) {
+        const sub = left.filter(a => a.GETSUJI === getu).sort((a, b) => cmp(a.SEINO, b.SEINO));
+        const m = /^\d+$/.test(getu) ? parseInt(getu, 10) : getu;
+        leftBlocks.push([jiLabel(getu), sub.map(a => ({ ...a, M: m }))]);
+    }
+
+    // --- 右ブロック：その他区分を区分ごとに ---
+    const rightBlocks = [];
+    const names = [...new Set(right.map(a => a.GUNNM))];
+    const ordered = DISPLAY_GROUPS.filter(n => names.includes(n) && n !== "生産機");
+    ordered.push(...names.filter(n => !ordered.includes(n)));
+    for (const nm of ordered) {
+        const sub = right.filter(a => a.GUNNM === nm).sort((a, b) => cmp(a.SEINO, b.SEINO));
+        const disp = LABEL_MAP[nm] ?? nm;
+        rightBlocks.push([disp, sub.map(a => ({ ...a, M: disp }))]);
+    }
+
+    // --- ブック生成 ---
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("決算時仕掛・完成一覧表", {
+        views: [{ state: "frozen", xSplit: 0, ySplit: 3, topLeftCell: "A4" }],
+    });
+
+    const fTitle = { name: "Meiryo UI", size: 18, bold: true };
+    const fHdr = { name: "游ゴシック", size: 12, bold: true };
+    const fGrp = { name: "HGS創英角ｺﾞｼｯｸUB", size: 14, bold: false };
+    const fNo = { name: "游ゴシック", size: 12, bold: true };
+    const fData = { name: "游ゴシック", size: 12, bold: false };
+    const fillGrp = { type: "pattern", pattern: "solid", fgColor: { argb: "FFBFBFBF" } };
+    const alC = { horizontal: "center", vertical: "middle" };
+    const alR = { horizontal: "right", vertical: "middle" };
+    const alV = { vertical: "middle" };
+    const HDRS = ["No.", "月次", "組立No.", "機種名", "インチ", "ゲージ", "仕掛/完成状況"];
+
+    const setCell = (r, c, v, font, align) => {
+        const cell = ws.getCell(r, c);
+        cell.value = (v === "" || v === undefined) ? null : v;
+        if (font) cell.font = font;
+        if (align) cell.alignment = align;
+        return cell;
+    };
+
+    function writeSide(col0, blocks, mergeHeader) {
+        HDRS.forEach((h, i) => setCell(3, col0 + 1 + i, h, fHdr, alC));
+        let r = 4;
+        for (const [label, items] of blocks) {
+            for (let ci = col0 + 1; ci <= col0 + 7; ci++) ws.getCell(r, ci).fill = fillGrp;
+            setCell(r, col0 + 2, label, fGrp, alC);
+            if (mergeHeader) ws.mergeCells(r, col0 + 2, r, col0 + 3);
+            r++;
+            items.forEach((row, idx) => {
+                setCell(r, col0 + 1, idx + 1, fNo, alR);
+                setCell(r, col0 + 2, row.M, fData, alC);
+                setCell(r, col0 + 3, row.SEINO, fData, alC);
+                setCell(r, col0 + 4, row.HMNM, fData, alC);
+                setCell(r, col0 + 5, row.INCH, fData, alC);
+                setCell(r, col0 + 6, row.GAUGE, fData, alC);
+                const c6 = setCell(r, col0 + 7, row.RATIO, fData, alV);
+                c6.numFmt = "0%";
+                r++;
+            });
+        }
+        const last = r - 1;
+        if (last >= 4) {
+            for (let rr = 3; rr <= last; rr++) {
+                for (let cc = col0 + 1; cc <= col0 + 7; cc++) {
+                    ws.getCell(rr, cc).border = {
+                        left: { style: cc === col0 + 1 ? "medium" : "thin" },
+                        right: { style: cc === col0 + 7 ? "medium" : "thin" },
+                        top: { style: rr === 3 ? "medium" : "thin" },
+                        bottom: { style: rr === last ? "medium" : "thin" },
+                    };
+                }
+            }
+        }
+        return last;
+    }
+
+    const lastLeft = leftBlocks.length ? writeSide(0, leftBlocks, true) : 3;
+    const lastRight = rightBlocks.length ? writeSide(8, rightBlocks, false) : 3;
+
+    // --- タイトル行（年月・台数=生産機の組立No数） ---
+    let ym = "";
+    const ty = parseInt(startGetsuji.slice(0, 4), 10);
+    const tm = parseInt(startGetsuji.slice(4, 6), 10);
+    const em2 = parseInt(endGetsuji.slice(4, 6), 10);
+    if (!isNaN(ty) && !isNaN(tm) && !isNaN(em2)) ym = tm === em2 ? `${ty}年${tm}月` : `${ty}年${tm}～${em2}月`;
+    ws.mergeCells(1, 1, 1, 12);
+    setCell(1, 1, `${ym}生産計画　${left.length}台　マシニング課生産機　決算時仕掛・完成一覧表`, fTitle, alC);
+
+    const widths = { 1: 5.0, 2: 7.375, 3: 12.375, 4: 20.875, 5: 7.75, 6: 8.0, 7: 15.0,
+                     8: 1.625,
+                     9: 5.0, 10: 15.375, 11: 10.75, 12: 20.125, 13: 9.0, 14: 8.0, 15: 15.0 };
+    for (const [ci, w] of Object.entries(widths)) ws.getColumn(Number(ci)).width = w;
+
+    ws.getRow(1).height = 24;
+    ws.getRow(2).height = 13.5;
+    ws.getRow(3).height = 15;
+    for (let rr = 4; rr <= Math.max(lastLeft, lastRight); rr++) ws.getRow(rr).height = 18;
+
+    ws.pageSetup = {
+        paperSize: 9,              // A4
+        orientation: "portrait",
+        fitToPage: true, fitToWidth: 1, fitToHeight: 1,
+        horizontalCentered: true,
+        margins: { left: 0.2, right: 0.2, top: 0.2, bottom: 0.2, header: 0.1, footer: 0.1 },
+    };
+
+    return await wb.xlsx.writeBuffer();
+}
+
+// ---------------------------------------------------------------- 画面
+let gridApi = null;
+let resultRows = [];      // 確定データ（D3010×D3420×D3110×D3430）
+let detailDirty = true;
+
+function app() {
+    const today = new Date();
+    const cy = today.getFullYear();
+    const cm = String(today.getMonth() + 1).padStart(2, "0");
+    return {
+        years: [cy - 1, cy, cy + 1].map(String),
+        months: Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0")),
+        jis: Array.from({ length: 10 }, (_, i) => String(i)),
+        sy: String(cy), sm: cm, sx: "0",
+        ey: String(cy), em: cm, ex: "9",
+        cutoff: "",
+
+        groupItems: [],         // [{code, name}]
+        selectedCodes: [],
+        codeToName: {},
+        masterLoading: true,
+        masterErr: "",
+        masterNote: "",
+
+        loading: false,
+        progress: "",
+        errors: [],
+        hasResult: false,
+        rowCount: 0,
+        caption: "",
+        showDetail: false,
+        xlsxBusy: false,
+        // 帳票ファイル名・タイトル用（処理開始時点の月次で固定）
+        runStart: "", runEnd: "",
+
+        async init() {
+            // M0060 品目群マスタ 初回ロード
+            try {
+                const rows = await fetchAll("M0060", null, ["HMGUNCD", "HMGUNNM"]);
+                const nmToCd = {};
+                for (const r of rows) {
+                    this.codeToName[str(r.HMGUNCD)] = str(r.HMGUNNM);
+                    nmToCd[str(r.HMGUNNM)] = r.HMGUNCD;
+                }
+                if (!rows.length) this.masterNote = "品目群マスタが空です";
+                this.groupItems = DISPLAY_GROUPS.filter(n => n in nmToCd).map(n => ({ code: nmToCd[n], name: n }));
+                if (rows.length && !this.groupItems.length) this.masterNote = "品目群マスタに該当データが見つかりません";
+                this.selectedCodes = this.groupItems.filter(g => DEFAULT_CHECKED.includes(g.name)).map(g => g.code);
+            } catch (e) {
+                this.masterErr = e.message;
+            } finally {
+                this.masterLoading = false;
+            }
+        },
+
+        cutoffDate() {
+            // input[type=date] の "YYYY-MM-DD" をローカル時刻の0時として扱う
+            return this.cutoff ? new Date(this.cutoff + "T00:00:00") : null;
+        },
+
+        onCutoffChange() {
+            // 完了日指定は取得済みデータに対する判定のみ。再取得せず表示を更新する
+            detailDirty = true;
+            if (this.showDetail) this.renderGrid();
+        },
+
+        async run() {
+            const startG = `${this.sy}${this.sm}${this.sx}`;
+            const endG = `${this.ey}${this.em}${this.ex}`;
+            const monthDiff = (Number(this.ey) - Number(this.sy)) * 12 + (Number(this.em) - Number(this.sm));
+            this.errors = [];
+            if (startG > endG) { this.errors.push("開始月次は終了月次以前を指定してください"); return; }
+            if (monthDiff > 1) { this.errors.push("月の指定は2か月に収めてください"); return; }
+
+            this.loading = true;
+            this.hasResult = false;
+            this.showDetail = false;
+            this.rowCount = 0;
+            resultRows = [];
+            detailDirty = true;
+            try {
+                resultRows = await this.loadData(startG, endG);
+                this.runStart = startG;
+                this.runEnd = endG;
+                this.rowCount = resultRows.length;
+                const seinoN = new Set(resultRows.map(r => r.SEINO)).size;
+                this.caption = `明細件数: ${resultRows.length.toLocaleString()} 件　組立No.: ${seinoN.toLocaleString()} 件　月次範囲: ${startG}～${endG}`;
+                this.hasResult = true;
+                this.progress = "";
+            } catch (e) {
+                this.errors.push(e.message);
+                this.progress = "";
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async loadData(startG, endG) {
+            const params = { s: Number(startG), e: Number(endG) };
+            this.selectedCodes.forEach((cd, i) => { params[`g${i}`] = String(cd); });
+            this.progress = "仕掛・完成一覧を取得中...";
+            const rows = await fetchSql(buildDetailSql(this.selectedCodes.length), params);
+            // GETSUJI 2026071 → "26071"
+            for (const r of rows) r.GETSUJI = isBlank(r.GETSUJI) ? "" : String(Math.trunc(Number(r.GETSUJI))).slice(2);
+            return rows;
+        },
+
+        async downloadXlsx() {
+            this.xlsxBusy = true;
+            try {
+                const buf = await buildKessanXlsx(resultRows, this.codeToName, this.runStart, this.runEnd, this.cutoffDate());
+                const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `マシニング課_決算時仕掛完成一覧表_${this.runStart}_${this.runEnd}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            } catch (e) {
+                this.errors = [`帳票生成エラー: ${e.message}`];
+            } finally {
+                this.xlsxBusy = false;
+            }
+        },
+
+        detailRows() {
+            const cutoffDate = this.cutoffDate();
+            return resultRows.map(r => {
+                const s = str(r.STATUS);
+                let status;
+                if (s === "4") status = isDone(r, cutoffDate) ? "完了" : "未完了";
+                else if (s === "1") status = "未完了";
+                else status = s;
+                return {
+                    SEINO: r.SEINO, GETSUJI: r.GETSUJI, HMNM: r.HMNM,
+                    INCH: numclean(r.INCH), GAUGE: numclean(r.GAUGE),
+                    INDNO: r.INDNO, LISTNO: r.LISTNO, STATUS: status,
+                    KTEDDT: fmtDate(toDate(r.KTEDDT)),
+                    HMCD: r.HMCD, KTCD: r.KTCD, SRCD: r.SRCD,
+                };
+            });
+        },
+
+        renderGrid() {
+            const el = document.getElementById("grid");
+            if (!gridApi) {
+                const colDefs = [
+                    ["SEINO", "組立No"], ["GETSUJI", "月次"], ["HMNM", "機種名"],
+                    ["INCH", "インチ"], ["GAUGE", "ゲージ"], ["INDNO", "作業指示番号"],
+                    ["LISTNO", "リストNo"], ["STATUS", "状態"], ["KTEDDT", "完了日"],
+                    ["HMCD", "品目CD"], ["KTCD", "工程"], ["SRCD", "納入先"],
+                ].map(([field, headerName]) => ({ field, headerName }));
+                gridApi = agGrid.createGrid(el, {
+                    columnDefs: colDefs,
+                    defaultColDef: { sortable: true, filter: true, resizable: true, minWidth: 80 },
+                    localeText: AG_GRID_LOCALE_JA,
+                    rowData: [],
+                    animateRows: false,
+                    onFirstDataRendered: p => p.api.autoSizeAllColumns(),
+                });
+            }
+            if (detailDirty) {
+                gridApi.setGridOption("rowData", this.detailRows());
+                detailDirty = false;
+            }
+        },
+
+        exportCsv() {
+            if (!gridApi) return;
+            gridApi.exportDataAsCsv({ fileName: `マシニング課_仕掛完成明細_${this.runStart}_${this.runEnd}.csv` });
+        },
+    };
+}
+</script>
+</body>
+</html>

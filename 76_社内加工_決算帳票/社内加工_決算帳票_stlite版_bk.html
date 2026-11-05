@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>社内加工 決算帳票</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.75.0/build/stlite.css">
+</head>
+<body>
+    <div id="root"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.75.0/build/stlite.js"></script>
+    <script>
+        stlite.mount({
+            requirements: ["pandas", "requests", "openpyxl"],
+            entrypoint: "app.py",
+            files: {
+                "app.py": `
+import streamlit as st
+import pandas as pd
+import requests
+import time
+import io
+from datetime import date
+
+API_URL = "http://pfw-api/query"
+API_KEY = "oG5^Ls%#20yq"
+
+st.set_page_config(page_title="社内加工 決算帳票", layout="wide")
+
+st.markdown("""
+<style>
+    .block-container { padding-top: 1rem; padding-bottom: 0rem; }
+    .stDeployButton { display: none !important; }
+    #MainMenu, footer, header { visibility: hidden !important; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def fetch_all(table, where=None, limit=10000, status_cont=None):
+    headers = {"Content-Type": "application/json", "X-API-KEY": API_KEY}
+    all_rows = []
+    columns = None
+    offset = 0
+    while True:
+        payload = {"table": table, "limit": limit, "offset": offset}
+        if where:
+            payload["where"] = where
+        resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+        if columns is None:
+            columns = data.get("columns", [])
+        rows = data.get("rows", [])
+        all_rows.extend(rows)
+        if status_cont:
+            status_cont.write(f"作業指示数{len(all_rows):,}件を取得・計算中...")
+            time.sleep(0.01)
+        if len(rows) < limit:
+            break
+        offset += limit
+    if not all_rows:
+        return pd.DataFrame(columns=columns or [])
+    return pd.DataFrame(all_rows, columns=columns)
+
+
+def build_kessan_xlsx(df, m0060_df, start_getsuji, end_getsuji, cutoff_date=None):
+    """決算時仕掛・完成一覧表フォーマットのxlsxを生成して bytes を返す。
+       SEINO（組立No.）単位で1行に集約し、仕掛/完成状況 = STATUS==4件数 / 全行数。
+       生産機=左ブロック（月次でグループ化）、その他区分=右ブロック（区分ごと）。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    DISPLAY_ORDER = ["生産機", "コンバージョン", "替釜", "部品注文", "整備機", "製作依頼"]
+    LABEL_MAP = {"コンバージョン": "CONVERSION"}
+
+    # --- 品目群コード→名称マップ（M0060） ---
+    code_to_name = {}
+    if isinstance(m0060_df, pd.DataFrame) and not m0060_df.empty:
+        cd_col = next((c for c in m0060_df.columns if "GUNCD" in c), m0060_df.columns[0])
+        nm_cands = [c for c in m0060_df.columns if c.endswith("NM") or c.endswith("NM1") or c.endswith("MEI")]
+        nm_col = nm_cands[0] if nm_cands else (m0060_df.columns[1] if len(m0060_df.columns) > 1 else cd_col)
+        for _, rr in m0060_df.iterrows():
+            code_to_name[str(rr[cd_col]).strip()] = str(rr[nm_col]).strip()
+    has_master = len(code_to_name) > 0
+
+    def first_val(s):
+        for v in s:
+            if pd.notna(v) and str(v).strip() != "":
+                return v
+        return ""
+
+    def numclean(v):
+        try:
+            fv = float(v)
+            return int(fv) if fv == int(fv) else fv
+        except Exception:
+            return v
+
+    def ji_label(g):
+        s = str(g).strip()
+        if len(s) >= 5:
+            try:
+                return f"{int(s[2:4])}月{int(s[4:])}次"
+            except Exception:
+                return s
+        return s
+
+    # --- SEINO単位に集約 ---
+    agg = []
+    if "SEINO" in df.columns and not df.empty:
+        for seino, g in df.groupby("SEINO", sort=False):
+            total = len(g)
+            if "STATUS" in g.columns:
+                is_done = g["STATUS"].astype(str).str.strip() == "4"
+                if cutoff_date is not None and "KTEDDT" in g.columns:
+                    kteddt_ts = pd.to_datetime(g["KTEDDT"], errors="coerce")
+                    done = int((is_done & (kteddt_ts.isna() | (kteddt_ts <= cutoff_date))).sum())
+                else:
+                    done = int(is_done.sum())
+            else:
+                done = 0
+            ratio = round(done / total, 2) if total else 0.0
+            gun = str(first_val(g["HMGUNCD"])).strip() if "HMGUNCD" in g.columns else ""
+            gunnm = "生産機" if not has_master else code_to_name.get(gun, "その他")
+            agg.append({
+                "SEINO": str(seino).strip(),
+                "GETSUJI": str(first_val(g["GETSUJI"])).strip() if "GETSUJI" in g.columns else "",
+                "HMNM": first_val(g["HMNM"]) if "HMNM" in g.columns else "",
+                "INCH": numclean(first_val(g["INCH"])) if "INCH" in g.columns else "",
+                "GAUGE": numclean(first_val(g["GAUGE"])) if "GAUGE" in g.columns else "",
+                "GUNNM": gunnm,
+                "RATIO": ratio,
+            })
+    adf = pd.DataFrame(agg)
+
+    left = adf[adf["GUNNM"] == "生産機"].copy() if not adf.empty else pd.DataFrame()
+    right = adf[adf["GUNNM"] != "生産機"].copy() if not adf.empty else pd.DataFrame()
+
+    # --- 左ブロック：生産機を月次でグループ化 ---
+    left_blocks = []
+    if not left.empty:
+        for getu in sorted(left["GETSUJI"].unique(), key=lambda x: str(x)):
+            sub = left[left["GETSUJI"] == getu].sort_values("SEINO")
+            rows = []
+            for _, rr in sub.iterrows():
+                gv = str(getu)
+                rows.append({
+                    "M": int(gv) if gv.isdigit() else gv,
+                    "SEINO": rr["SEINO"], "HMNM": rr["HMNM"],
+                    "INCH": rr["INCH"], "GAUGE": rr["GAUGE"], "RATIO": rr["RATIO"],
+                })
+            left_blocks.append((ji_label(getu), rows))
+
+    # --- 右ブロック：その他区分を区分ごとに ---
+    right_blocks = []
+    if not right.empty:
+        names = list(dict.fromkeys(right["GUNNM"].tolist()))
+        ordered = [n for n in DISPLAY_ORDER if n in names and n != "生産機"]
+        ordered += [n for n in names if n not in ordered]
+        for nm in ordered:
+            sub = right[right["GUNNM"] == nm].sort_values("SEINO")
+            disp = LABEL_MAP.get(nm, nm)
+            rows = []
+            for _, rr in sub.iterrows():
+                rows.append({
+                    "M": disp,
+                    "SEINO": rr["SEINO"], "HMNM": rr["HMNM"],
+                    "INCH": rr["INCH"], "GAUGE": rr["GAUGE"], "RATIO": rr["RATIO"],
+                })
+            right_blocks.append((disp, rows))
+
+    # --- ブック生成 ---
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "決算時仕掛・完成一覧表"
+
+    f_title = Font(name="Meiryo UI", size=18, bold=True)
+    f_hdr = Font(name="游ゴシック", size=12, bold=True)
+    f_grp = Font(name="HGS創英角ｺﾞｼｯｸUB", size=14, bold=False)
+    f_no = Font(name="游ゴシック", size=12, bold=True)
+    f_data = Font(name="游ゴシック", size=12, bold=False)
+    fill_grp = PatternFill("solid", start_color="FFBFBFBF")
+    al_c = Alignment(horizontal="center", vertical="center")
+    al_r = Alignment(horizontal="right", vertical="center")
+    al_v = Alignment(vertical="center")
+    thin = Side(style="thin")
+    medium = Side(style="medium")
+    HEADERS = ["No.", "月次", "組立No.", "機種名", "インチ", "ゲージ", "仕掛/完成状況"]
+
+    def write_side(col0, blocks, merge_header):
+        for i, h in enumerate(HEADERS):
+            c = ws.cell(3, col0 + 1 + i, h)
+            c.font = f_hdr
+            c.alignment = al_c
+        r = 4
+        for label, rows in blocks:
+            for ci in range(col0 + 1, col0 + 8):
+                ws.cell(r, ci).fill = fill_grp
+            gh = ws.cell(r, col0 + 2, label)
+            gh.font = f_grp
+            gh.alignment = al_c
+            if merge_header:
+                ws.merge_cells(start_row=r, start_column=col0 + 2, end_row=r, end_column=col0 + 3)
+            r += 1
+            for n, row in enumerate(rows, start=1):
+                c0 = ws.cell(r, col0 + 1, n); c0.font = f_no; c0.alignment = al_r
+                c1 = ws.cell(r, col0 + 2, row["M"]); c1.font = f_data; c1.alignment = al_c
+                c2 = ws.cell(r, col0 + 3, row["SEINO"]); c2.font = f_data; c2.alignment = al_c
+                c3 = ws.cell(r, col0 + 4, row["HMNM"]); c3.font = f_data; c3.alignment = al_c
+                c4 = ws.cell(r, col0 + 5, row["INCH"]); c4.font = f_data; c4.alignment = al_c
+                c5 = ws.cell(r, col0 + 6, row["GAUGE"]); c5.font = f_data; c5.alignment = al_c
+                c6 = ws.cell(r, col0 + 7, row["RATIO"]); c6.font = f_data; c6.alignment = al_v
+                c6.number_format = "0%"
+                r += 1
+        last = r - 1
+        if last >= 4:
+            for rr in range(3, last + 1):
+                for cc in range(col0 + 1, col0 + 8):
+                    ws.cell(rr, cc).border = Border(
+                        left=medium if cc == col0 + 1 else thin,
+                        right=medium if cc == col0 + 7 else thin,
+                        top=medium if rr == 3 else thin,
+                        bottom=medium if rr == last else thin,
+                    )
+        return last
+
+    last_left = write_side(0, left_blocks, True) if left_blocks else 3
+    last_right = write_side(8, right_blocks, False) if right_blocks else 3
+
+    # --- タイトル行（年月・台数=生産機の組立No数） ---
+    try:
+        ty = int(str(start_getsuji)[:4])
+        tm = int(str(start_getsuji)[4:6])
+        em2 = int(str(end_getsuji)[4:6])
+        ym = f"{ty}年{tm}月" if tm == em2 else f"{ty}年{tm}～{em2}月"
+    except Exception:
+        ym = ""
+    title = f"{ym}生産計画　{len(left)}台　マシニング課生産機　決算時仕掛・完成一覧表"
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
+    tc = ws.cell(1, 1, title)
+    tc.font = f_title
+    tc.alignment = al_c
+
+    widths = {1: 5.0, 2: 7.375, 3: 12.375, 4: 20.875, 5: 7.75, 6: 8.0, 7: 15.0,
+              8: 1.625,
+              9: 5.0, 10: 15.375, 11: 10.75, 12: 20.125, 13: 9.0, 14: 8.0, 15: 15.0}
+    for ci, w in widths.items():
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[2].height = 13.5
+    ws.row_dimensions[3].height = 15
+    for rr in range(4, max(last_left, last_right) + 1):
+        ws.row_dimensions[rr].height = 18
+    ws.freeze_panes = "A4"
+
+    ws.page_margins.left = 0.2
+    ws.page_margins.right = 0.2
+    ws.page_margins.top = 0.2
+    ws.page_margins.bottom = 0.2
+    ws.page_margins.header = 0.1
+    ws.page_margins.footer = 0.1
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.print_options.horizontalCentered = True
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+# M0060 品目群マスタ 初回ロード
+if "m0060" not in st.session_state:
+    with st.spinner("品目群マスタを読み込み中..."):
+        try:
+            st.session_state.m0060 = fetch_all("M0060")
+        except Exception as e:
+            st.session_state.m0060 = pd.DataFrame()
+            st.session_state.m0060_err = str(e)
+
+st.markdown("#### マシニング課　仕掛・完成一覧表")
+
+# --- 月次範囲選択 ---
+_today = date.today()
+_cy, _cm = _today.year, _today.month
+years = [str(y) for y in range(_cy - 1, _cy + 2)]
+months = [f"{m:02d}" for m in range(1, 13)]
+jis = [str(x) for x in range(0, 10)]
+
+_s_year = str(_cy)
+_s_month = f"{_cm:02d}"
+_e_year = str(_cy)
+_e_month = f"{_cm:02d}"
+
+row = st.columns(
+    [0.4, 1.0, 0.7, 0.5, 0.3, 0.4, 1.0, 0.7, 0.5, 0.5, 3],
+    vertical_alignment="bottom"
+)
+with row[0]:
+    st.write("**開始**")
+with row[1]:
+    sy = st.selectbox("年", years, index=years.index(_s_year), key="sy")
+with row[2]:
+    sm = st.selectbox("月", months, index=months.index(_s_month), key="sm")
+with row[3]:
+    sx = st.selectbox("次", jis, index=0, key="sx")
+with row[4]:
+    st.markdown("<p style='text-align:center'>～</p>", unsafe_allow_html=True)
+with row[5]:
+    st.write("**終了**")
+with row[6]:
+    ey = st.selectbox("年", years, index=years.index(_e_year), key="ey")
+with row[7]:
+    em = st.selectbox("月", months, index=months.index(_e_month), key="em")
+with row[8]:
+    ex = st.selectbox("次", jis, index=9, key="ex")
+with row[10]:
+    cutoff_date_input = st.date_input("オプション：完了日指定", value=None, key="cutoff_dt", format="YYYY/MM/DD")
+
+start_getsuji = f"{sy}{sm}{sx}"
+end_getsuji = f"{ey}{em}{ex}"
+cutoff_date = pd.Timestamp(cutoff_date_input) if cutoff_date_input is not None else None
+
+# --- 品目群チェックボックス ---
+DISPLAY_GROUPS = ["生産機", "コンバージョン", "替釜", "部品注文", "整備機", "製作依頼"]
+
+m0060_df = st.session_state.get("m0060", pd.DataFrame())
+selected_codes = []
+load_clicked = False
+
+if "m0060_err" in st.session_state:
+    st.error(f"品目群マスタ取得エラー: {st.session_state.m0060_err}")
+    col_lbl, col_btn = st.columns([2, 1])
+    with col_lbl:
+        st.write("**区分**")
+    with col_btn:
+        load_clicked = st.button("処理開始", type="primary")
+elif not m0060_df.empty:
+    cd_col = next((c for c in m0060_df.columns if "GUNCD" in c), m0060_df.columns[0])
+    nm_candidates = [c for c in m0060_df.columns if c.endswith("NM") or c.endswith("NM1") or c.endswith("MEI")]
+    nm_col = nm_candidates[0] if nm_candidates else (m0060_df.columns[1] if len(m0060_df.columns) > 1 else cd_col)
+
+    nm_to_cd = dict(zip(m0060_df[nm_col].astype(str), m0060_df[cd_col].tolist()))
+    items = [(nm_to_cd[nm], nm) for nm in DISPLAY_GROUPS if nm in nm_to_cd]
+
+    DEFAULT_CHECKED = {"生産機", "コンバージョン"}
+    if items:
+        row2 = st.columns([0.6] + [1]*len(items) + [1], vertical_alignment="bottom")
+        with row2[0]:
+            st.write("**区分**")
+        for i, (code, name) in enumerate(items):
+            with row2[i + 1]:
+                if st.checkbox(name, value=name in DEFAULT_CHECKED, key=f"cb_{code}"):
+                    selected_codes.append(code)
+        with row2[len(items) + 1]:
+            load_clicked = st.button("処理開始", type="primary")
+    else:
+        st.caption("品目群マスタに該当データが見つかりません")
+        load_clicked = st.button("処理開始", type="primary")
+else:
+    st.caption("品目群マスタが空です")
+    load_clicked = st.button("処理開始", type="primary")
+
+SEINO_CHUNK = 500
+
+# --- D3010 取得（読み込みボタン押下時） ---
+if load_clicked:
+    _month_diff = (int(ey) - int(sy)) * 12 + (int(em) - int(sm))
+    if start_getsuji > end_getsuji:
+        st.error("開始月次は終了月次以前を指定してください")
+    elif _month_diff > 1:
+        st.error("月の指定は2か月に収めてください")
+    else:
+        where_parts = [{"GETSUJI": {"between": [start_getsuji, end_getsuji]}}]
+        if selected_codes:
+            where_parts.append({"HMGUNCD": {"in": selected_codes}})
+        where = {"and": where_parts} if len(where_parts) > 1 else where_parts[0]
+
+        for k in ["d3010_err", "d3420_err", "d3110_err", "d3430_err", "d3010_df", "d3010_raw",
+                  "d3010_seinos", "d3010_seino_offset", "d3420_parts",
+                  "d3420_merged_df", "d3110_listnos", "d3110_listno_offset", "d3110_parts",
+                  "d3110_final_df", "d3430_indnos", "d3430_indno_offset", "d3430_parts",
+                  "show_detail"]:
+            st.session_state.pop(k, None)
+
+        with st.status("仕掛・完成一覧取得中...", expanded=True) as status:
+            time.sleep(0.1)
+            prog = st.empty()
+            try:
+                df = fetch_all("D3010", where=where, status_cont=prog)
+                if "GETSUJI" in df.columns and not df.empty:
+                    df["GETSUJI"] = df["GETSUJI"].apply(
+                        lambda v: str(int(v))[2:] if pd.notna(v) else ""
+                    )
+                seinos = df["SEINO"].dropna().unique().tolist() if "SEINO" in df.columns else []
+                st.session_state.d3010_raw = df
+                st.session_state.d3010_seinos = seinos
+                st.session_state.d3010_seino_offset = 0
+                st.session_state.d3420_parts = []
+                st.session_state.d3010_range = f"{start_getsuji}～{end_getsuji}"
+                status.update(label=f"D3010 完了（{len(df):,} 件 / 製番 {len(seinos):,} 件）", state="complete", expanded=False)
+            except Exception as e:
+                st.session_state.d3010_err = str(e)
+                status.update(label="D3010 取得失敗", state="error", expanded=False)
+        st.rerun()
+
+# --- D3420 チャンク取得（レンダリングごとに1チャンク） ---
+if "d3010_raw" in st.session_state and "d3420_parts" in st.session_state:
+    seinos = st.session_state.d3010_seinos
+    offset = st.session_state.d3010_seino_offset
+    total = len(seinos)
+
+    if offset < total:
+        chunk = seinos[offset:offset + SEINO_CHUNK]
+        with st.status(f"D3420 を取得中... ({min(offset + SEINO_CHUNK, total):,}/{total:,} 件)", expanded=False) as status:
+            try:
+                chunk_df = fetch_all("D3420", where={"SEINO": {"in": chunk}})
+                if not chunk_df.empty:
+                    st.session_state.d3420_parts.append(chunk_df)
+                st.session_state.d3010_seino_offset = offset + SEINO_CHUNK
+                status.update(state="complete", expanded=False)
+            except Exception as e:
+                st.session_state.d3420_err = str(e)
+                st.session_state.d3010_seino_offset = total
+                status.update(label="D3420 取得失敗", state="error", expanded=False)
+        st.rerun()
+    else:
+        # D3420 全チャンク完了 → D3010とマージしてD3110フェーズへ
+        df = st.session_state.d3010_raw.copy()
+        parts = st.session_state.d3420_parts
+        if parts:
+            d3420_df = pd.concat(parts, ignore_index=True)
+            join_cols = ["SEINO"] + [c for c in ["INDNO", "LINENO", "LISTNO", "STATUS", "KTCD"] if c in d3420_df.columns]
+            df = df.merge(d3420_df[join_cols], on="SEINO", how="left")
+        listnos = df["LISTNO"].dropna().unique().tolist() if "LISTNO" in df.columns else []
+        st.session_state.d3420_merged_df = df
+        st.session_state.d3110_listnos = listnos
+        st.session_state.d3110_listno_offset = 0
+        st.session_state.d3110_parts = []
+        for k in ["d3010_raw", "d3010_seinos", "d3010_seino_offset", "d3420_parts"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
+# --- D3110 チャンク取得（レンダリングごとに1チャンク） ---
+if "d3420_merged_df" in st.session_state and "d3110_parts" in st.session_state:
+    listnos = st.session_state.d3110_listnos
+    offset = st.session_state.d3110_listno_offset
+    total = len(listnos)
+
+    if offset < total:
+        chunk = listnos[offset:offset + SEINO_CHUNK]
+        with st.status(f"D3110 を取得中... ({min(offset + SEINO_CHUNK, total):,}/{total:,} 件)", expanded=False) as status:
+            try:
+                chunk_df = fetch_all("D3110", where={"LISTNO": {"in": chunk}})
+                if not chunk_df.empty:
+                    st.session_state.d3110_parts.append(chunk_df)
+                st.session_state.d3110_listno_offset = offset + SEINO_CHUNK
+                status.update(state="complete", expanded=False)
+            except Exception as e:
+                st.session_state.d3110_err = str(e)
+                st.session_state.d3110_listno_offset = total
+                status.update(label="D3110 取得失敗", state="error", expanded=False)
+        st.rerun()
+    else:
+        # D3110 全チャンク完了 → マージして確定
+        df = st.session_state.d3420_merged_df.copy()
+        parts = st.session_state.d3110_parts
+        if parts:
+            d3110_df = pd.concat(parts, ignore_index=True)
+            # LISTNO の型を統一（LEFT JOIN で float 化した場合に int と不一致になるのを防ぐ）
+            def _norm_listno(v):
+                if pd.isna(v):
+                    return None
+                try:
+                    return int(float(v))
+                except Exception:
+                    return v
+            df["LISTNO"] = df["LISTNO"].apply(_norm_listno)
+            d3110_df["LISTNO"] = d3110_df["LISTNO"].apply(_norm_listno)
+            # LISTNO単位でVERNO最大行のみ残し、QTY==0は除外
+            if "VERNO" in d3110_df.columns:
+                d3110_df["VERNO"] = pd.to_numeric(d3110_df["VERNO"], errors="coerce")
+                d3110_df = d3110_df.sort_values("VERNO", ascending=False).drop_duplicates(subset=["LISTNO"], keep="first")
+            if "QTY" in d3110_df.columns:
+                d3110_df["QTY"] = pd.to_numeric(d3110_df["QTY"], errors="coerce")
+                d3110_df = d3110_df[d3110_df["QTY"].fillna(0) != 0]
+            # D3010由来のHMCDを除去してD3110のHMCDを優先する
+            df = df.drop(columns=[c for c in ["HMCD"] if c in df.columns])
+            existing_cols = set(df.columns)
+            d3110_join_cols = ["LISTNO"] + [c for c in d3110_df.columns if c != "LISTNO" and c not in existing_cols]
+            df = df.merge(d3110_df[d3110_join_cols], on="LISTNO", how="left")
+        if "SRCD" in df.columns:
+            df = df[df["SRCD"].astype(str).str.strip() == "40"]
+        indnos = df["INDNO"].dropna().astype(str).unique().tolist() if "INDNO" in df.columns else []
+        st.session_state.d3110_final_df = df
+        st.session_state.d3430_indnos = indnos
+        st.session_state.d3430_indno_offset = 0
+        st.session_state.d3430_parts = []
+        for k in ["d3420_merged_df", "d3110_listnos", "d3110_listno_offset", "d3110_parts"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
+# --- D3430 チャンク取得（レンダリングごとに1チャンク） ---
+if "d3110_final_df" in st.session_state and "d3430_parts" in st.session_state:
+    indnos = st.session_state.d3430_indnos
+    offset = st.session_state.d3430_indno_offset
+    total = len(indnos)
+
+    if offset < total:
+        chunk = indnos[offset:offset + SEINO_CHUNK]
+        with st.status(f"D3430 を取得中... ({min(offset + SEINO_CHUNK, total):,}/{total:,} 件)", expanded=False) as status:
+            try:
+                chunk_df = fetch_all("D3430", where={"INDNO": {"in": chunk}})
+                if not chunk_df.empty:
+                    st.session_state.d3430_parts.append(chunk_df)
+                st.session_state.d3430_indno_offset = offset + SEINO_CHUNK
+                status.update(state="complete", expanded=False)
+            except Exception as e:
+                st.session_state.d3430_err = str(e)
+                st.session_state.d3430_indno_offset = total
+                status.update(label="D3430 取得失敗", state="error", expanded=False)
+        st.rerun()
+    else:
+        # D3430 全チャンク完了 → KTEDDT をマージして確定
+        df = st.session_state.d3110_final_df.copy()
+        parts = st.session_state.d3430_parts
+        if parts:
+            d3430_df = pd.concat(parts, ignore_index=True)
+            if "LINENO" in d3430_df.columns and "LINENO" in df.columns:
+                def _norm_lineno(v):
+                    if pd.isna(v):
+                        return None
+                    try:
+                        return int(float(v))
+                    except Exception:
+                        return v
+                df["LINENO"] = df["LINENO"].apply(_norm_lineno)
+                d3430_df["LINENO"] = d3430_df["LINENO"].apply(_norm_lineno)
+            if "INSTDT" in d3430_df.columns:
+                d3430_df["INSTDT"] = pd.to_datetime(d3430_df["INSTDT"], errors="coerce")
+                d3430_df = d3430_df.sort_values("INSTDT", ascending=False).drop_duplicates(subset=["INDNO", "LINENO"], keep="first")
+            else:
+                d3430_df = d3430_df.drop_duplicates(subset=["INDNO", "LINENO"], keep="first")
+            if "KTEDDT" in d3430_df.columns:
+                df = df.merge(d3430_df[["INDNO", "LINENO", "KTEDDT"]], on=["INDNO", "LINENO"], how="left")
+        st.session_state.d3010_df = df
+        for k in ["d3110_final_df", "d3430_indnos", "d3430_indno_offset", "d3430_parts"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
+# --- エラー表示 ---
+if "d3010_err" in st.session_state:
+    st.error(f"D3010 エラー: {st.session_state.d3010_err}")
+if "d3420_err" in st.session_state:
+    st.error(f"D3420 エラー: {st.session_state.d3420_err}")
+if "d3110_err" in st.session_state:
+    st.error(f"D3110 エラー: {st.session_state.d3110_err}")
+if "d3430_err" in st.session_state:
+    st.error(f"D3430 エラー: {st.session_state.d3430_err}")
+
+# --- 結果表示 ---
+if "d3010_df" in st.session_state:
+    df = st.session_state.d3010_df
+    rng = st.session_state.get("d3010_range", "")
+    if df.empty:
+        st.info("該当データがありません")
+    else:
+        DISP_COLS = ["SEINO", "GETSUJI", "HMNM", "INCH", "GAUGE", "INDNO", "LISTNO", "STATUS", "KTEDDT", "HMCD", "KTCD", "SRCD"]
+        disp_cols = [c for c in DISP_COLS if c in df.columns]
+        missing = [c for c in DISP_COLS if c not in df.columns]
+        if missing:
+            st.warning(f"以下の列が取得できませんでした: {', '.join(missing)}")
+        _seino_n = df["SEINO"].nunique() if "SEINO" in df.columns else 0
+        st.caption(f"明細件数: {len(df):,} 件　組立No.: {_seino_n:,} 件　月次範囲: {rng}")
+        disp_df = df[disp_cols].copy()
+        if "STATUS" in disp_df.columns:
+            def _fmt_status(row):
+                v = row.get("STATUS", "")
+                if str(v).strip() == "4":
+                    if cutoff_date is not None and "KTEDDT" in row.index:
+                        kteddt = pd.to_datetime(row["KTEDDT"], errors="coerce")
+                        if pd.notna(kteddt) and kteddt > cutoff_date:
+                            return "未完了"
+                    return "完了"
+                return "未完了" if str(v).strip() == "1" else (str(v) if pd.notna(v) else "")
+            disp_df["STATUS"] = disp_df.apply(_fmt_status, axis=1)
+        if "KTEDDT" in disp_df.columns:
+            disp_df["KTEDDT"] = pd.to_datetime(disp_df["KTEDDT"], errors="coerce").apply(
+                lambda v: v.strftime("%Y/%m/%d") if pd.notna(v) else ""
+            )
+        COL_LABELS = {
+            "SEINO": "組立No", "GETSUJI": "月次", "HMNM": "機種名",
+            "INCH": "インチ", "GAUGE": "ゲージ", "INDNO": "作業指示番号",
+            "LISTNO": "リストNo", "STATUS": "状態", "KTEDDT": "完了日",
+            "HMCD": "品目CD", "KTCD": "工程", "SRCD": "納入先"
+        }
+        # --- 決算時仕掛・完成一覧表フォーマットで xlsx 生成 ---
+        try:
+            xlsx_bytes = build_kessan_xlsx(
+                df, st.session_state.get("m0060", pd.DataFrame()),
+                start_getsuji, end_getsuji, cutoff_date
+            )
+        except Exception as e:
+            xlsx_bytes = b""
+            st.error(f"帳票生成エラー: {e}")
+        col_dl, col_det, col_sp = st.columns([2, 2, 6])
+        with col_dl:
+            st.download_button(
+                label="エクセルダウンロード",
+                data=xlsx_bytes,
+                file_name=f"マシニング課_決算時仕掛完成一覧表_{start_getsuji}_{end_getsuji}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                disabled=(not xlsx_bytes)
+            )
+        with col_det:
+            if st.button("詳細表示", key="btn_show_detail", use_container_width=True):
+                st.session_state["show_detail"] = True
+        if st.session_state.get("show_detail", False):
+            col_cfg = {c: st.column_config.TextColumn(COL_LABELS[c]) for c in disp_cols if c in COL_LABELS}
+            st.dataframe(disp_df, column_config=col_cfg, use_container_width=True, height=600, hide_index=True)
+`
+            }
+        }, document.getElementById("root"));
+    </script>
+</body>
+</html>
