@@ -31,8 +31,13 @@ BACKUP_KEEP_DAYS = 7
 # ---------------------------------------------------------------------------
 # 接続先
 # ---------------------------------------------------------------------------
-# 業務ポータル（Django）の読み取りAPI。ログインも API キーも不要。
+# 業務ポータル（Django）の読み取りAPI。ログインは不要。
 PORTAL_API_BASE = "http://pfw-gyomu"
+# 工程図管理の図番API（/kouteizu/api/genpinhyo/drawings/）が求める APIキー（X-API-KEY）。
+# 2026-11-06 追加。⚠⚠ Django の settings.KOUTEIZU_API_KEY と同じ値でないと 401 になる。
+#   変えるときは両方を同時に直すこと。ほかの業務ポータルAPI（加工スケジュール作成）は
+#   キーを見ないので、全部のリクエストに付けて送っても害は無い。
+PORTAL_API_KEY = "QwVXswjbjD4B"
 PORTAL_API_TIMEOUT_SEC = 120
 
 # rBOM の FastAPI（CHANGE GEAR BOX の引当を読むのに使う。読み取り専用のキー）。

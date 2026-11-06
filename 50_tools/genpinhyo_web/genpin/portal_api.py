@@ -7,7 +7,7 @@
     図番                                fetch_drawings         POST /kouteizu/api/genpinhyo/drawings/
     図番の検索                          search_drawings        GET  /kouteizu/api/genpinhyo/drawings/
 
-・ログインも API キーも不要（読み取り専用）。
+・ログインは不要（読み取り専用）。工程図管理の図番APIだけ X-API-KEY が要る（config.PORTAL_API_KEY。2026-11-06）。
 ・⚠ 標準ライブラリだけで書く。check_input（NiceGUI）は pandas の無い venv で動いていて、ここを import するため。
 ・失敗したら PortalApiError を投げる。呼び出し側は「空のデータで上書きしない」こと。
 ・API の仕様は Django 側の apps/machining_schedule/Document/仕様書.md「現品票システム向けAPI」。
@@ -48,14 +48,17 @@ def _request(path, params=None, payload=None):
     if params:
         url += "?" + urllib.parse.urlencode(params)
 
+    # APIキーはどのリクエストにも付ける（キーを見るのは工程図管理の図番APIだけ）。
+    headers = {"X-API-KEY": config.PORTAL_API_KEY}
     if payload is None:
-        request = urllib.request.Request(url, method="GET")
+        request = urllib.request.Request(url, method="GET", headers=headers)
     else:
+        headers["Content-Type"] = "application/json"
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
 
     try:
