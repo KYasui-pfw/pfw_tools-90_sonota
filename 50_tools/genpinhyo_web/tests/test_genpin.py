@@ -117,7 +117,7 @@ class FilterTests(unittest.TestCase):
 class BuildRecordsTests(unittest.TestCase):
     def test_record_values(self):
         drawings = {"740-409CA30": {"B1": "740-409CA$$-B1", "F1": "", "L": "740-409CA30-L",
-                                    "handwritten": "X@", "spare1": "S1"}}
+                                    "M": "740-409CA30-M1", "handwritten": "X@", "spare1": "S1"}}
         record = update.build_records(
             [slip(is_plating=True, assy_no="J　102")],
             {"J0926": ("ヤマヨ　ジャージー", "JAPAN")},
@@ -132,6 +132,7 @@ class BuildRecordsTests(unittest.TestCase):
         self.assertEqual(record["ﾒｯｷ"], "1.0")
         self.assertEqual(record["B1図番"], "740-409CA$$-B1")
         self.assertEqual(record["L図番"], "740-409CA30-L")
+        self.assertEqual(record["M図番"], "740-409CA30-M1")
         self.assertEqual(record["手書き図番"], "X@")
         self.assertEqual(record["予備図番1"], "S1")
         self.assertEqual(record["R図番"], "")
@@ -302,16 +303,20 @@ class TagExcelTests(unittest.TestCase):
             self.assertEqual(sheet.cell(17 + offset, 44).border.right.style, "thin")   # 工程の右辺
 
     def test_layout_labels(self):
-        """図番の見出し（B・F の番号は無し、手書図番・予備項目を追加）と、2枚目にも枠があること。"""
-        data, _ = tag_excel.build_tag_book([self.row(**{"手書き図番": "X@", "予備図番1": "S1"}), self.row(ロット番号="H2")])
+        """図番の見出し（B・F の番号は無し、手書図番・他図番を追加）と、2枚目にも枠があること。"""
+        data, _ = tag_excel.build_tag_book([
+            self.row(**{"手書き図番": "X@", "M図番": "M1", "予備図番1": "S1", "予備図番2": "S2", "予備図番3": "", "予備図番4": "S4"}),
+            self.row(ロット番号="H2"),
+        ])
         sheet = openpyxl.load_workbook(io.BytesIO(data)).active
         labels = [sheet.cell(row, 1).value for row in range(8, 17)]
         self.assertEqual(labels, ["B　図番：", "B　図番：", "F　図番：", "F　図番：",
-                                  "L　図番：", "R　図番：", "C　図番：", "手書図番：", "予備項目："])
+                                  "L　図番：", "R　図番：", "C　図番：", "手書図番：", "他図番："])
         self.assertEqual(sheet.cell(5, 1).value, "完成部番：")
-        self.assertEqual((sheet.cell(15, 7).value, sheet.cell(16, 7).value), ("X@", "S1"))
+        self.assertEqual((sheet.cell(15, 7).value, sheet.cell(16, 7).value), ("X@", "S1/S2/S4"))   # 他図番は予備図番1〜4 を / でつなぐ（空欄は飛ばす。M図番は載せない）
         rows = tag_excel.ROWS_PER_TAG
-        self.assertEqual(sheet.cell(16 + rows, 1).value, "予備項目：")
+        self.assertEqual(sheet.cell(16 + rows, 1).value, "他図番：")
+        self.assertIsNone(sheet.cell(16 + rows, 7).value)   # 他図番が無ければ空
         self.assertEqual(sheet.cell(5 + rows, 7).font.sz, sheet.cell(5, 7).font.sz)
         self.assertEqual(sheet.cell(19, 1).border.bottom.style, "dotted")   # 切り取り線
 

@@ -38,7 +38,7 @@ TAG_CELLS = {
     "R": (13, 7),
     "C": (14, 7),
     "handwritten": (15, 7),  # 手書図番（末尾が @ の図番）
-    "spare1": (16, 7),       # 予備項目（7つの枠からあふれた図番の1つ目）
+    "other": (16, 7),        # 他図番（7つの枠からあふれた図番＝予備図番1〜4 を / でつなぐ）
     "lot_no": (1, 30),       # ロット番号
     "getsuji": (4, 24),      # 月次（例 '11月7次'）
     "assy_no": (7, 24),      # 組立番号
@@ -57,8 +57,11 @@ QR_BORDER = 4                # まわりの余白（マス）
 DRAWING_FIELDS = {
     "B1": "B1図番", "B2": "B2図番", "F1": "F1図番", "F2": "F2図番",
     "L": "L図番", "R": "R図番", "C": "C図番",
-    "handwritten": "手書き図番", "spare1": "予備図番1",
+    "handwritten": "手書き図番",
 }
+# 他図番の欄に / でつないで載せる列（例 S1/S2/S3/S4。空欄は飛ばす）。
+# ⚠ M図番は載せない（2026-11-06 利用者の指示。DB に保存するだけ）。
+OTHER_DRAWING_COLUMNS = ["予備図番1", "予備図番2", "予備図番3", "予備図番4"]
 
 # 完成部番にこれを含み、必要数が2以上なら、1個ずつ別の現品票にする（1/3, 2/3, 3/3）。
 SPLIT_PER_PIECE = ("-111", "-404", "-102")
@@ -85,7 +88,7 @@ class TagEntry:
     process: str = ""
     notice: str = ""
     header: str = ""
-    drawings: dict = None   # {"B1": ..., ..., "C": ..., "handwritten": ..., "spare1": ...}
+    drawings: dict = None   # {"B1": ..., ..., "C": ..., "handwritten": ..., "other": ...}
     qr_png: bytes = b""     # QR（またはエラー画像）の PNG
 
 
@@ -187,7 +190,9 @@ def entries_from_rows(rows):
 
 def drawings_of(row):
     """一覧の行（辞書）から、現品票に載せる図番を取り出す。"""
-    return {key: row.get(column) or "" for key, column in DRAWING_FIELDS.items()}
+    drawings = {key: row.get(column) or "" for key, column in DRAWING_FIELDS.items()}
+    drawings["other"] = "/".join(str(row.get(column)) for column in OTHER_DRAWING_COLUMNS if row.get(column))
+    return drawings
 
 
 def _piece_count(row):

@@ -21,7 +21,9 @@ import urllib.request
 from . import config
 
 # 図番：API の項目名 → genpinhyo の列名。
-# 印字・QR に使うのは先頭の7つだけ。手書き（末尾が @ の図番）と予備（7つの枠からあふれた図番）は保存と参考表示のみ。
+# QR に使うのは B1〜C の7つだけ。M・手書き（末尾が @ の図番）・予備（枠からあふれた図番）は保存と一覧表示のみ。
+# 現品票の紙面には予備を「他図番」に / でつないで載せる（M は載せない）。
+# API が枠ごとに返す <枠>_file・<枠>_url（図面ファイル名・URL。2026-11-06 追加）は、いまは使わない。
 DRAWING_COLUMNS = {
     "B1": "B1図番",
     "B2": "B2図番",
@@ -30,6 +32,7 @@ DRAWING_COLUMNS = {
     "L": "L図番",
     "R": "R図番",
     "C": "C図番",
+    "M": "M図番",   # 2026-11-06 追加。保存するだけ（M1 がここ。M2・M3 は API が予備へあふれさせる）
     "handwritten": "手書き図番",
     "spare1": "予備図番1",
     "spare2": "予備図番2",
@@ -138,7 +141,7 @@ def fetch_drawings(items):
     """加工部番のリストから図番を取る。
 
     items: 加工部番のリスト
-    戻り値: [{"item", "matched_by", "B1", ..., "C", "handwritten", "spare1".."spare4"}, ...]
+    戻り値: [{"item", "matched_by", "B1", ..., "C", "M", "handwritten", "spare1".."spare4"}, ...]
             送った順・送った件数どおり。見つからない品目は matched_by="none"・図番は全部空。
     """
     items = [str(item) for item in items]

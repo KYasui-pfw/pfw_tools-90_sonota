@@ -189,8 +189,8 @@ rBOMの **手配指示入力画面** を開き、該当の部番に
     st.markdown("---")
     st.markdown("### 対応が完了したあとは")
     st.info("""
-対応完了後、**1時間～1時間半**を目途に、rBOMからデータが連携されます。
-その後、画面右上の「**データ更新**」ボタンを押下いただくと、現品票に表示されます。
+対応完了後、**15分**を目途に、rBOMからデータが連携され、現品票に表示されます。
+すぐに確認したいときは、画面右上の「**データ更新**」ボタンを押下してください。
 """)
     if st.button("閉じる", use_container_width=True):
         st.rerun()
@@ -281,6 +281,8 @@ def show_grid(df):
             help_dialog()
 
     shown = df.rename(columns={"G": GAUGE_LABEL})
+    # M図番は DB に保存するだけで、一覧には出さない（利用者の指示 2026-11-06）。
+    shown = shown.drop(columns=["M図番"], errors="ignore")
     extra = [name for name in db.EXTRA_DRAWING_COLUMNS if name in shown.columns]
     if extra and "C図番" in shown.columns:
         rest = [name for name in shown.columns if name not in extra]

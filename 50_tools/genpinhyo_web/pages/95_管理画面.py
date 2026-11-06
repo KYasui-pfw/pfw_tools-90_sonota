@@ -915,7 +915,7 @@ def show_data_sources():
 | **工程VERSION** | 同上（加工伝票と一緒に返る） | ①加工スケジュール作成の作業計画の VER → ②品目の優先VER → ③ 1 の順 | データ更新 |
 | **工程**（例 B1-G1-L1-G2） | 同上 | 加工スケジュール作成の品目工程マスタから、品目CD×VER で組み立てる（工程CDごとの連番付き） | データ更新 |
 | **メッキ** | 同上 | 加工スケジュール作成のメッキマスタ（`$$` のまとめ登録は前方一致） | データ更新 |
-| **図番**（B1・B2・F1・F2・L・R・C／手書き・予備1〜4） | 業務ポータル<br>`POST {portal}/kouteizu/api/genpinhyo/drawings/` | 工程図管理（Obbligato）。品目CD2 → 品目CD の順で引く。記号ごとに前詰め、あふれは予備へ、`@` は手書きへ | データ更新・手入力発行・チェック項目入力（検索） |
+| **図番**（B1・B2・F1・F2・L・R・C・M／手書き・予備1〜4） | 業務ポータル<br>`POST {portal}/kouteizu/api/genpinhyo/drawings/`（`X-API-KEY` が要る） | 工程図管理（Obbligato）。品目CD2 → 品目CD の順で引く。記号ごとに前詰め、あふれは予備へ、`@` は手書きへ。現品票の紙面には予備を「他図番」に載せる（M は保存のみ） | データ更新・手入力発行・チェック項目入力（検索） |
 | **工程**（手入力用） | 業務ポータル<br>`GET {portal}/machining-schedule/api/genpinhyo/process-strings/` | 品目CD×VER ごとの工程文字列 | 手入力発行 |
 | **品目工程マスタ＋加工機名** | 業務ポータル<br>`GET {portal}/machining-schedule/api/genpinhyo/process-master/` | 品目CD・VER・工程順・工程・加工機。チェック項目入力が起動時に checksheet.db へ写す（マスタから消えた工程は、チェック項目ごと消える） | チェック項目入力 |
 | **CHANGE GEAR BOX**（時限処理・**2026-10-28 停止中**） | rBOM FastAPI<br>`POST {config.RBOM_API_BASE}/query`（D3520・D3010） | 引当（D3520 の品目名 CHANGE GEAR BOX）を CH＋8桁のロット番号で現品票にする。VER は `lots/` API で引く | データ更新 |
