@@ -17,8 +17,25 @@
     --pico-spacing: 0.5rem;
     --pico-border-radius: 0;
 }
-body > header { background: #1f3a5f; color: #fff; padding: 0.6rem 1rem; margin-bottom: 1rem; }
+body > header { background: #1f3a5f; color: #fff; padding: 0.6rem 1rem; margin-bottom: 1rem;
+                display: flex; justify-content: space-between; align-items: center; }
 body > header h1 { color: #fff; font-size: 1.2rem; margin: 0; }
+/* 右上の「処理内容」ボタン。目立たせない（枠線だけ・小さめ・薄い文字） */
+.help-btn { width: auto; margin: 0; padding: 0.15rem 0.7rem; font-size: 0.75rem; font-weight: 400;
+            background: transparent; border: 1px solid rgba(255, 255, 255, 0.45); color: rgba(255, 255, 255, 0.75); }
+.help-btn:hover, .help-btn:focus { background: rgba(255, 255, 255, 0.12); color: #fff; border-color: rgba(255, 255, 255, 0.45); }
+.tabs { display: flex; justify-content: flex-start; border-bottom: 2px solid #1f3a5f; margin-bottom: 0.8rem; }
+.tabs button { width: auto; margin: 0; padding: 0.45rem 1.4rem; font-weight: 700; border: 0;
+               background: transparent; color: #1f3a5f; }
+.tabs button:hover { background: #e8eef6; color: #1f3a5f; }
+.tabs button.active, .tabs button.active:hover { background: #1f3a5f; color: #fff; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+.pair .dropzone { margin-bottom: 0.8rem; }
+.pair .dropzone .name { font-weight: 700; margin-bottom: 0.3rem; }
+.help h3 { font-size: 1.05rem; margin: 0.6rem 0 0.2rem; padding-bottom: 0.15rem; border-bottom: 1px solid var(--pico-muted-border-color); }
+.help h4 { font-size: 0.95rem; margin: 0.8rem 0 0.2rem; }
+.help ul, .help ol { margin: 0 0 0.3rem; padding-left: 1.3rem; font-size: 0.9rem; }
+.help li { margin-bottom: 0.1rem; }
 main.container { max-width: 860px; }
 .status { font-size: 0.9rem; color: var(--pico-muted-color); }
 .error { color: #c62828; white-space: pre-wrap; }
@@ -34,17 +51,27 @@ main.container { max-width: 860px; }
 .downloads button { margin: 0; font-size: 0.85rem; padding: 0.3rem 0.6rem; }
 </style>
 </head>
-<body>
-<header><h1>発注一覧変換_担当G</h1></header>
+<body x-data="app()" @keydown.escape.window="help = false">
+<header>
+    <h1>発注一覧変換_担当G</h1>
+    <button type="button" class="help-btn" @click="help = true">処理内容</button>
+</header>
 
-<main class="container" x-data="app()">
-    <article>
-        <div class="loading" x-show="!ready && !error">
-            <p aria-busy="true">変換エンジン（Python）を読み込んでいます…</p>
-            <p class="sub">インターネットから部品を取ってくるため、数十秒〜数分かかることがあります。<br>
-                この表示が消えるまでお待ちください（画面を閉じたり、再読み込みしたりしないでください）。</p>
-        </div>
+<main class="container">
+    <div class="loading" x-show="!ready && !initError">
+        <p aria-busy="true">変換エンジン（Python）を読み込んでいます…</p>
+        <p class="sub">インターネットから部品を取ってくるため、数十秒〜数分かかることがあります。<br>
+            この表示が消えるまでお待ちください（画面を閉じたり、再読み込みしたりしないでください）。</p>
+    </div>
+    <p class="error" x-show="initError" x-text="initError"></p>
 
+    <nav class="tabs">
+        <button type="button" :class="{ active: tab === 'edit' }" @click="tab = 'edit'">エクセル編集</button>
+        <button type="button" :class="{ active: tab === 'compare' }" @click="tab = 'compare'">エクセル比較</button>
+    </nav>
+
+    <!-- ========== エクセル編集タブ ========== -->
+    <article x-show="tab === 'edit'">
         <div class="dropzone" :class="{ over: dragOver }"
              @dragover.prevent="dragOver = true"
              @dragleave.prevent="dragOver = false"
@@ -89,20 +116,113 @@ main.container { max-width: 860px; }
             </div>
         </template>
     </article>
-    <p class="status">集約発注番号・発注番号・行番号・仕入先CD（＋集約納期・発注数計）を Excel から読み、
+    <p class="status" x-show="tab === 'edit'">集約発注番号・発注番号・行番号・仕入先CD（＋集約納期・発注数計）を Excel から読み、
         残りは rBOM（http://pfw-api）から取り直して作ります。社内LANにつながっている必要があります。</p>
+
+    <!-- ========== エクセル比較タブ ========== -->
+    <article x-show="tab === 'compare'">
+        <div class="pair">
+            <template x-for="slot in [{ key: 'prev', label: '前回ぶん' }, { key: 'cur', label: '今回ぶん' }]" :key="slot.key">
+                <div class="dropzone" :class="{ over: cmpDrag === slot.key }"
+                     @dragover.prevent="cmpDrag = slot.key"
+                     @dragleave.prevent="cmpDrag = ''"
+                     @drop.prevent="onCmpDrop(slot.key, $event)">
+                    <p class="name" x-text="slot.label"></p>
+                    <p>ここにExcel（.xlsx）をドラッグ＆ドロップ</p>
+                    <p class="status">または</p>
+                    <input type="file" accept=".xlsx" @change="setCmpFile(slot.key, $event.target.files[0] || null)"
+                           :disabled="!ready || cmpBusy">
+                    <p x-show="cmpFiles[slot.key]"><strong>選択中:</strong> <span x-text="cmpFiles[slot.key] && cmpFiles[slot.key].name"></span></p>
+                </div>
+            </template>
+        </div>
+        <p class="status">どちらも「エクセル編集」タブで出力した Excel（仕入先ごとの .xlsx）を指定します。</p>
+
+        <button @click="compare()" :disabled="!ready || cmpBusy || !cmpFiles.prev || !cmpFiles.cur" :aria-busy="cmpBusy">
+            <span x-text="cmpBusy ? '比較中…' : '比較する'"></span>
+        </button>
+
+        <template x-if="cmpError">
+            <p class="error" x-text="cmpError"></p>
+        </template>
+
+        <template x-if="cmpFile">
+            <div>
+                <p><strong>ダウンロード</strong></p>
+                <div class="downloads">
+                    <button class="outline" @click="download(cmpFile.data, cmpFile.name)" x-text="cmpFile.name"></button>
+                </div>
+            </div>
+        </template>
+
+        <template x-if="cmpMessages.length">
+            <div>
+                <p><strong>比較結果</strong></p>
+                <ul class="log">
+                    <template x-for="m in cmpMessages"><li x-text="m"></li></template>
+                </ul>
+            </div>
+        </template>
+    </article>
+    <p class="status" x-show="tab === 'compare'">発注番号をキーに、今回ぶんの全行へ「新規」「変更」を付け、前回にだけある行は「削除」として前回の位置に入れて出力します。「変更」の行は薄い黄色、「削除」の行は薄い灰色の背景になります。
+        rBOM には接続しません（変換エンジンの読み込み後は社内LANなしでも動きます）。</p>
+
+    <!-- ========== 処理内容（右上のボタンで開く。開いているタブの説明を出す） ========== -->
+    <dialog :open="help" @click.self="help = false">
+        <article class="help">
+            <header>
+                <button type="button" aria-label="閉じる" rel="prev" @click="help = false"></button>
+                <p><strong>処理内容</strong></p>
+            </header>
+
+            <div>
+                <h3>エクセル編集</h3>
+                <p>発注一覧の Excel を、担当Gのレイアウトに合わせた発注一覧に編集します（仕入先ごとに1ファイル）。</p>
+            </div>
+
+            <div>
+                <h3>エクセル比較</h3>
+                <h4>何をするか</h4>
+                <p>「エクセル編集」タブで出力した Excel を<strong>前回ぶん</strong>と<strong>今回ぶん</strong>の2つ読み比べ、
+                    今回ぶんと同じレイアウトのまま、「担当者略称」と「集約備考」の間に<strong>区分</strong>の列を足して出力します。</p>
+                <h4>手順</h4>
+                <ol>
+                    <li>2つの Excel を1行目の項目名で読む（列の位置には頼らない）。「エクセル編集」で出した形式でないとエラーにする。</li>
+                    <li><strong>発注番号</strong>をキーに、今回の各行を前回の同じ発注番号の行と突き合わせる。</li>
+                    <li>前回に同じ発注番号が無ければ区分を<strong>「新規」</strong>にする。</li>
+                    <li>前回にあり、次の9項目のどれかが違えば区分を<strong>「変更」</strong>にする。<br>
+                        品目ｺｰﾄﾞ／発注数／希望納期／単価／工程ｺｰﾄﾞ／備考／金額／品名／注文書発行日</li>
+                    <li>「変更」の行は、違った項目を「<strong>項目名：前回→今回</strong>」の形で<strong>集約備考</strong>に書く（違いが複数なら改行で並べる）。元の集約備考は置き換わる。行全体が薄い黄色の背景になる。</li>
+                    <li>差異の無い行は区分を空欄のまま、今回ぶんの並び順で全行出力する。</li>
+                    <li>前回にあって今回に無い行は、区分を<strong>「削除」</strong>にして、前回の位置（前回で直前にあった行の後ろ）に入れ、行全体を薄い灰色の背景にする。値は前回のまま。</li>
+                </ol>
+                <h4>決まりごと</h4>
+                <ul>
+                    <li>注文書発行区分・回答納期・担当者略称・集約備考は比較しない。</li>
+                    <li>空欄は「（空欄）」と書く（例: 希望納期：（空欄）→2026/11/01）。</li>
+                    <li>10 と 10.0 のような書き方の違いは同じ値とみなす。日付は YYYY/MM/DD にそろえて比べる。</li>
+                    <li>同じ発注番号が複数行あるとき（集約でない発注で1つの発注に複数行）は、出てきた順に組にして比べる。</li>
+                    <li>出力ファイル名は「今回ぶんのファイル名_比較_日付_時刻.xlsx」。ファイル名は比較に使わない（見出しの形式だけを見る）。</li>
+                    <li>ファイルがおかしいときは、比較せずに<strong>原因と直し方</strong>を表示する（同じファイルを2つ選んだ・項目が足りない／名前が違う・見出しが1行目にない・別のシートにある・変換前の発注一覧を選んだ・データが無い・Excel でない など）。</li>
+                    <li>比較はできるが怪しいときは、結果に「⚠」を付けて知らせる（共通の発注番号が1件もない・今回の行数が前回の半分未満 など）。</li>
+                </ul>
+            </div>
+        </article>
+    </dialog>
 </main>
 
 <script id="py-convert" type="text/plain">
 import datetime
+import difflib
 import io
+import itertools
 import json
 import re
 import unicodedata
 import zipfile
 
 import openpyxl
-from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 # ---------------------------------------------------------------------------
@@ -476,18 +596,28 @@ def fit_widths(headers, rows):
     return widths
 
 
-def build_book(sheet_title, rows):
+# 比較の区分ごとの行の背景（ごく薄く）。変更＝黄色、削除＝灰色。新規・変更なしは塗らない（新規を青にする案は利用者が取りやめ）
+KUBUN_FILLS = {
+    "削除": PatternFill(fill_type="solid", start_color="F2F2F2", end_color="F2F2F2"),
+    "変更": PatternFill(fill_type="solid", start_color="FFF9DB", end_color="FFF9DB"),
+}
+
+
+def build_book(sheet_title, rows, headers=None):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = safe_name(sheet_title)[:31] or "発注一覧"
-    headers = list(OUTPUT_COLUMNS)
+    headers = list(headers or OUTPUT_COLUMNS)
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
     for row in rows:
         ws.append([row.get(h) for h in headers])
+        fill = KUBUN_FILLS.get(row.get("区分"))   # 比較の「削除」「変更」の行は行全体を薄く塗る
         for col, h in enumerate(headers, start=1):
             cell = ws.cell(row=ws.max_row, column=col)
+            if fill:
+                cell.fill = fill
             if h not in NUMBER_COLUMNS:
                 cell.number_format = "@"
             if h in WRAP_COLUMNS:
@@ -514,6 +644,286 @@ def build_book(sheet_title, rows):
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# 5. 比較（エクセル比較タブ）
+#   エクセル編集タブで出した Excel を「前回ぶん」「今回ぶん」の2つ読み、
+#   今回ぶんの全行に区分（新規／変更）を付けて出す。rBOM には問い合わせない。
+#   ・キーは発注番号。前回に無ければ「新規」
+#   ・COMPARE_COLUMNS の9項目のどれかが違えば「変更」。内容は集約備考に書く
+#   ・前回にだけある行は区分「削除」で、前回の位置（前回で直前にあった行の後ろ）に差し込む。行の背景は変更＝薄い黄色・削除＝薄い灰色（利用者の指定 2026-11-09）
+# ---------------------------------------------------------------------------
+KEY_COLUMN = "発注番号"
+KUBUN_COLUMN = "区分"
+KIND_NEW = "新規"
+KIND_CHANGED = "変更"
+KIND_DELETED = "削除"          # 前回にあって今回に無い行
+DETAIL_COLUMN = "集約備考"     # 変更の内容はここに書く（元の集約備考は置き換わる）
+COMPARE_COLUMNS = ["品目ｺｰﾄﾞ", "発注数", "希望納期", "単価", "工程ｺｰﾄﾞ", "備考", "金額", "品名", "注文書発行日"]
+EMPTY_LABEL = "（空欄）"       # 空→値／値→空を「→2026/11/01」のままにすると何も書いていないように見えるため
+# 出力の列: 編集タブと同じ並びで、「担当者略称」と「集約備考」の間に「区分」を入れる
+_i = OUTPUT_COLUMNS.index(DETAIL_COLUMN)
+COMPARE_OUTPUT_COLUMNS = OUTPUT_COLUMNS[:_i] + [KUBUN_COLUMN] + OUTPUT_COLUMNS[_i:]
+
+
+def plain(v):
+    """セルの値を比べられる文字にそろえる（None→空・日付→YYYY/MM/DD・端数の無い小数→整数）"""
+    if v is None:
+        return ""
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        return date_text(v)
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).strip()
+
+
+def compare_text(column, v):
+    """比較用の文字。数値の列は 10・10.0・"10" を同じにする（編集タブの出力は数値で書かれている）"""
+    if column in NUMBER_COLUMNS:
+        n = num(v)
+        if n is not None:
+            return str(n)
+    return plain(v)
+
+
+def cell_out(column, v):
+    """出力に書く値。数値の列は数値のまま（Excel で合計できるように）、ほかは文字"""
+    if column in NUMBER_COLUMNS:
+        n = num(v)
+        if n is not None:
+            return n
+    return plain(v)
+
+
+class CompareError(ValueError):
+    """比較の入力がおかしいときの例外。メッセージはそのまま画面に出す（複数行でよい）。
+    誰が見ても「どのファイルの・何が・どう直せばよいか」が分かる文章にすること"""
+
+
+HEADER_SCAN_ROWS = 10    # 見出しが1行目に無いときに探す行数
+LISTED_NAMES = 25        # エラーに「ファイルにある項目」として並べる最大数
+
+
+def norm_name(s):
+    """項目名の書き方の違い（全角・半角、空白）を無視して比べるための形"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s))
+
+
+def header_map(row):
+    """見出し行 → {項目名: 列の位置}（空のセルは無視）"""
+    return {text(v): i for i, v in enumerate(row or ()) if v is not None and text(v)}
+
+
+def column_hint(name, found):
+    """見つからない項目名ごとの案内。書き方の違い・打ち間違いなら、どれのことかを教える"""
+    # 必要な項目名そのものは候補にしない（「備考」が「集約備考」の候補になってしまうため）
+    cands = [f for f in found if f not in OUTPUT_COLUMNS]
+    for f in cands:
+        if norm_name(f) == norm_name(name):
+            return f"「{f}」→「{name}」に直してください（全角・半角や空白の違いです）"
+    close = difflib.get_close_matches(norm_name(name), [norm_name(f) for f in cands], n=1, cutoff=0.6)
+    if close:
+        f = next(x for x in cands if norm_name(x) == close[0])
+        return f"「{name}」がありません（「{f}」のことなら、項目名を「{name}」に直してください）"
+    return f"「{name}」がありません"
+
+
+def explain_bad_header(label, wb, ws, rows, cols):
+    """見出しが足りないときの、原因別の案内文を作る（CompareError にして投げる前の文章）"""
+    missing = [c for c in OUTPUT_COLUMNS if c not in cols]
+    lines = [f"{label}のファイルは、「エクセル編集」タブで出力した発注一覧の形式ではありません。"]
+    cause_found = False    # 原因を特定できたら、足りない項目の一覧（長くなる）は省く
+
+    # ① 変換前の発注一覧（集約発注番号・仕入先CD がある）を選んでしまった
+    if "集約発注番号" in cols and "仕入先CD" in cols:
+        lines.append("→ 変換前の発注一覧のようです。先に「エクセル編集」タブで変換し、出力されたファイルを選んでください。")
+        cause_found = True
+
+    # ② 見出しが1行目に無い（タイトル行などが上にある）
+    for n, row in enumerate(rows, start=2):
+        found = header_map(row)
+        if all(c in found for c in OUTPUT_COLUMNS):
+            lines.append(f"→ 見出しが1行目ではなく {n} 行目にあります。1行目が見出しになるようにしてください。")
+            cause_found = True
+            break
+
+    # ③ 見出しが先頭ではないシートにある
+    for other in wb.worksheets:
+        if other.title == ws.title:
+            continue
+        first = next(other.iter_rows(values_only=True), None)
+        if all(c in header_map(first) for c in OUTPUT_COLUMNS):
+            lines.append(f"→ シート「{other.title}」には見出しがそろっています。"
+                         f"比較は先頭のシート（「{ws.title}」）を読むので、このシートを先頭に移してください。")
+            cause_found = True
+            break
+
+    if missing and not cause_found and cols:
+        lines.append("足りない項目:")
+        found_names = list(cols)
+        lines.extend("  ・" + column_hint(c, found_names) for c in missing)
+    lines.append(f"項目数: 必要 {len(OUTPUT_COLUMNS)} 個 / ファイルの1行目にあるもの {len(cols)} 個")
+    if cols:
+        names = list(cols)
+        shown = "、".join(names[:LISTED_NAMES]) + (f" …ほか {len(names) - LISTED_NAMES} 個" if len(names) > LISTED_NAMES else "")
+        lines.append("ファイルの1行目にある項目: " + shown)
+    else:
+        lines.append("ファイルの1行目が空です。")
+    lines.append("※ 列の並び順は問いません。項目名が同じならかまいません。")
+    return "\n".join(lines)
+
+
+def read_output_rows(data, label):
+    """編集タブで出した Excel を読む。1行＝{列名: 値}。列は1行目の項目名で引く（区分など余分な列は無視）。
+    戻り値: (行の一覧, 読んだシート名, 無視した余分な列の名前, シートの数)"""
+    raw = bytes(data)
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    except Exception as e:
+        if raw[:4] == b"\xd0\xcf\x11\xe0":
+            reason = "古い形式（.xls）か、パスワードが付いたファイルです。.xlsx で、パスワード無しで保存し直してください。"
+        elif raw[:2] == b"PK":
+            reason = "ファイルが壊れているか、Excel のファイルではありません。Excel で開けるか確認してください。"
+        else:
+            reason = "Excel（.xlsx）のファイルではありません。CSV などではなく、「エクセル編集」で出力した .xlsx を選んでください。"
+        raise CompareError(f"{label}のファイルを Excel として開けませんでした。\n→ {reason}\n（詳細: {e}）")
+    try:
+        ws = wb.worksheets[0]
+        rows = ws.iter_rows(values_only=True)
+        header = next(rows, None)
+        cols = header_map(header)
+        if any(c not in cols for c in OUTPUT_COLUMNS):
+            peek = list(itertools.islice(rows, HEADER_SCAN_ROWS - 1))
+            raise CompareError(explain_bad_header(label, wb, ws, peek, cols))
+
+        out = []
+        non_blank = 0
+        for row in rows:
+            if all(v is None or text(v) == "" for v in row):
+                continue
+            non_blank += 1
+            if KUBUN_COLUMN in cols and cols[KUBUN_COLUMN] < len(row) and text(row[cols[KUBUN_COLUMN]]) == KIND_DELETED:
+                continue    # 比較結果を前回ぶんに渡したとき、「削除」の行（もう無い発注）は読まない
+            rec ={c: cell_out(c, row[cols[c]] if cols[c] < len(row) else None) for c in OUTPUT_COLUMNS}
+            if not text(rec[KEY_COLUMN]):
+                continue    # 発注番号の無い行は読み飛ばす
+            out.append(rec)
+        if non_blank == 0:
+            raise CompareError(f"{label}のファイルには見出し行しかありません（データの行がありません）。"
+                               f"シート「{ws.title}」にデータが入っているか確認してください。")
+        if not out:
+            raise CompareError(f"{label}のファイルに、「{KEY_COLUMN}」が入った行がありません（{non_blank} 行ありましたが、"
+                               f"{KEY_COLUMN}の列がすべて空欄です）。列の中身がずれていないか確認してください。")
+        extras = [n for n in cols if n not in OUTPUT_COLUMNS and n != KUBUN_COLUMN]
+        return out, ws.title, extras, len(wb.worksheets)
+    finally:
+        wb.close()
+
+
+def describe_changes(old, new):
+    """変わった項目を「品目ｺｰﾄﾞ：A→B」の形で、変わった数だけ改行でつなぐ。変わっていなければ空文字"""
+    changes = []
+    for c in COMPARE_COLUMNS:
+        a, b = compare_text(c, old[c]), compare_text(c, new[c])
+        if a != b:
+            changes.append(f"{c}：{a or EMPTY_LABEL}→{b or EMPTY_LABEL}")
+    return "\n".join(changes)
+
+
+def compare_rows(prev_rows, cur_rows):
+    """今回の全行に区分を付ける。今回ファイルの並びのまま。前回にだけある行は「削除」で前回の位置に差し込む。
+    同じ発注番号が複数行あるとき（集約でない発注で、1つの発注に複数行）は、出てきた順どうしで組にする"""
+    prev_groups = {}
+    for r in prev_rows:
+        prev_groups.setdefault(text(r[KEY_COLUMN]), []).append(r)
+    used = {}
+    out = []
+    counts = {"new": 0, "changed": 0, "same": 0}
+    cur_keys = {}
+    out_index = {}     # (発注番号, 組の順番) → out の位置（削除行の挿入位置を決めるのに使う）
+    for r in cur_rows:
+        key = text(r[KEY_COLUMN])
+        cur_keys[key] = cur_keys.get(key, 0) + 1
+        pos = used.get(key, 0)
+        used[key] = pos + 1
+        same_key = prev_groups.get(key, [])
+        if pos < len(same_key):
+            out_index[(key, pos)] = len(out)
+        row = dict(r, **{KUBUN_COLUMN: ""})
+        if pos >= len(same_key):
+            row[KUBUN_COLUMN] = KIND_NEW
+            counts["new"] += 1
+        else:
+            detail = describe_changes(same_key[pos], r)
+            if detail:
+                row[KUBUN_COLUMN] = KIND_CHANGED
+                row[DETAIL_COLUMN] = detail
+                counts["changed"] += 1
+            else:
+                counts["same"] += 1
+        out.append(row)
+    # 前回にだけある行（無くなったもの）は「削除」にして、前回で直前にあった行（今回にも残っているもの）の
+    # すぐ後ろに入れる＝前回の位置のまま。そういう行が無ければ先頭。値は前回のまま
+    seen = {}
+    counts["deleted"] = 0
+    anchor = -1                # 直前の「今回にも残っている行」の out の位置
+    after = {}                 # out の位置 → その後ろに入れる削除行
+    for r in prev_rows:
+        key = text(r[KEY_COLUMN])
+        pos = seen.get(key, 0)
+        seen[key] = pos + 1
+        if pos < used.get(key, 0):
+            anchor = out_index[(key, pos)]
+        else:
+            after.setdefault(anchor, []).append(dict(r, **{KUBUN_COLUMN: KIND_DELETED}))
+            counts["deleted"] += 1
+    merged = list(after.get(-1, []))
+    for i, row in enumerate(out):
+        merged.append(row)
+        merged.extend(after.get(i, []))
+    out = merged
+    dup = {k for k, v in prev_groups.items() if len(v) > 1} | {k for k, n in cur_keys.items() if n > 1}
+    counts["duplicate_keys"] = len(dup)
+    return out, counts
+
+
+def compare_books(prev_data, cur_data, cur_name=""):
+    if bytes(prev_data) == bytes(cur_data):
+        raise CompareError("前回ぶんと今回ぶんに、同じファイルが選ばれています。\n"
+                           "→ 比較する2つのファイル（前回に出力したものと、今回出力したもの）を選び直してください。")
+    prev_rows, _, prev_extras, prev_sheets = read_output_rows(prev_data, "前回")
+    cur_rows, title, cur_extras, cur_sheets = read_output_rows(cur_data, "今回")
+    rows, s = compare_rows(prev_rows, cur_rows)
+
+    log = [f"前回 {len(prev_rows)} 行 / 今回 {len(cur_rows)} 行（キー: 発注番号）",
+           f"新規 {s['new']} 件 / 変更 {s['changed']} 件 / 削除 {s['deleted']} 件 / 変更なし {s['same']} 件"]
+    # 気づかないまま間違った比較にならないよう、怪しい点は「⚠」で知らせる（止めはしない）
+    prev_keys = {text(r[KEY_COLUMN]) for r in prev_rows}
+    if not any(text(r[KEY_COLUMN]) in prev_keys for r in cur_rows):
+        log.append("⚠ 前回と今回で共通の発注番号が1件もありません。仕入先や日付が違うファイル、"
+                   "または前回・今回の選び間違いではありませんか？（このままだと今回の全行が「新規」になります）")
+    if len(cur_rows) < len(prev_rows) * 0.5:
+        log.append(f"⚠ 今回の行数（{len(cur_rows)}）が前回（{len(prev_rows)}）の半分より少なくなっています。"
+                   "前回・今回を逆に選んでいませんか？")
+    for label, extras, sheets in (("前回", prev_extras, prev_sheets), ("今回", cur_extras, cur_sheets)):
+        if extras:
+            log.append(f"ℹ {label}のファイルには、比較に使わない項目がありました（無視しました）: "
+                       + "、".join(extras[:LISTED_NAMES]))
+        if sheets > 1:
+            log.append(f"ℹ {label}のファイルはシートが {sheets} 枚あります。先頭のシートだけを読みました。")
+    if s["new"] + s["changed"] + s["deleted"] == 0:
+        log.append("差異はありませんでした（区分はすべて空欄で出力します）")
+    if s["deleted"]:
+        log.append(f"前回にだけある行 {s['deleted']} 件を、区分「削除」として前回の位置に入れました（薄い灰色の背景。変更の行は薄い黄色）")
+    if s["duplicate_keys"]:
+        log.append(f"同じ発注番号が複数行あるものが {s['duplicate_keys']} 件ありました（出てきた順に組にして比べています）")
+
+    stem = re.sub(r"\.xlsx$", "", text(cur_name), flags=re.I) or "発注一覧_担当G"
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return {"log": log,
+            "file": {"name": f"{safe_name(stem)}_比較_{stamp}.xlsx",
+                     "data": build_book(title, rows, COMPARE_OUTPUT_COLUMNS)}}
 
 
 async def convert(data, progress=None):
@@ -578,6 +988,10 @@ async def convert(data, progress=None):
 function app() {
     return {
         ready: false,
+        initError: '',      // 変換エンジンの読み込み失敗（どのタブでも出す）
+        tab: 'edit',        // 'edit'（エクセル編集）/ 'compare'（エクセル比較）
+        help: false,        // 「処理内容」ダイアログ
+        // --- エクセル編集タブ ---
         busy: false,
         file: null,
         dragOver: false,
@@ -587,6 +1001,13 @@ function app() {
         files: [],
         zip: null,
         pyodide: null,
+        // --- エクセル比較タブ ---
+        cmpFiles: { prev: null, cur: null },
+        cmpDrag: '',        // ドラッグ中の枠（'prev' / 'cur' / ''）
+        cmpBusy: false,
+        cmpError: '',
+        cmpMessages: [],
+        cmpFile: null,
 
         // Alpine が x-data の init() を自動で呼ぶ。x-init でも呼ぶと二重に初期化されるので付けないこと
         async init() {
@@ -605,7 +1026,7 @@ await micropip.install('openpyxl')
                 this.pyodide = py;
                 this.ready = true;
             } catch (e) {
-                this.error = '変換エンジンの読み込みに失敗しました: ' + e;
+                this.initError = '変換エンジンの読み込みに失敗しました: ' + e;
             }
         },
 
@@ -656,6 +1077,59 @@ await micropip.install('openpyxl')
                 if (result) result.destroy();
                 this.busy = false;
                 this.progress = '';
+            }
+        },
+
+        // ---------- エクセル比較タブ ----------
+        setCmpFile(slot, f) {
+            this.cmpFiles[slot] = f;
+            this.cmpError = '';
+            this.cmpMessages = [];
+            this.cmpFile = null;
+        },
+
+        onCmpDrop(slot, ev) {
+            this.cmpDrag = '';
+            if (!this.ready || this.cmpBusy) return;
+            const f = ev.dataTransfer.files[0];
+            if (!f) return;
+            if (!/\.xlsx$/i.test(f.name)) {
+                this.cmpError = '.xlsx ファイルを指定してください: ' + f.name;
+                return;
+            }
+            const input = ev.currentTarget.querySelector('input[type=file]');
+            if (input) input.value = '';
+            this.setCmpFile(slot, f);
+        },
+
+        async compare() {
+            this.cmpBusy = true;
+            this.cmpError = '';
+            this.cmpMessages = [];
+            this.cmpFile = null;
+            let result = null;
+            try {
+                const prev = new Uint8Array(await this.cmpFiles.prev.arrayBuffer());
+                const cur = new Uint8Array(await this.cmpFiles.cur.arrayBuffer());
+                result = this.pyodide.globals.get('compare_books')(prev, cur, this.cmpFiles.cur.name);
+                const out = result.toJs({ dict_converter: Object.fromEntries });
+                this.cmpMessages = Array.from(out.log);
+                this.cmpFile = out.file;
+            } catch (e) {
+                // 入力ファイルの不備（CompareError）は複数行の案内文なので、そのまま全部出す。
+                // それ以外の想定外のエラーは、トレースバックの最終行だけを見せる
+                const msg = String(e.message || e).trim();
+                const marker = 'CompareError: ';
+                const at = msg.indexOf(marker);
+                if (at >= 0) {
+                    this.cmpError = msg.slice(at + marker.length).trim();
+                } else {
+                    const lines = msg.split('\n');
+                    this.cmpError = '比較に失敗しました: ' + lines[lines.length - 1];
+                }
+            } finally {
+                if (result) result.destroy();
+                this.cmpBusy = false;
             }
         },
 
