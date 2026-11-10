@@ -8,6 +8,8 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime, timedelta
 import glob
+import zipfile
+import calendar
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -84,6 +86,101 @@ TARGET_SENDER = os.getenv('TARGET_SENDER')
 SAVE_DIR = os.getenv('SAVE_DIR')
 RBOM_DIR = os.getenv('RBOM_DIR')
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '300'))
+
+# ファイル名に年が入っていないため、古いメールを読み直すと別年の同名ファイルと衝突する。
+# メールの検索範囲は直近FETCH_DAYS日に絞り、ARCHIVE_MONTHSか月より古いファイルは月替わりにzipへ退避する。
+# （FETCH_DAYS < ARCHIVE_MONTHSか月 を保つこと。退避したファイルが再取得されないようにするため）
+FETCH_DAYS = 20
+ARCHIVE_MONTHS = 1
+BACKUP_SUBDIR = 'backup'
+ARCHIVE_MARKER = '.last_archive_month'
+IMAP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+
+def months_ago(dt, n):
+    """dtのnか月前の日時を返す（月末は存在する日に丸める）"""
+    y, m = dt.year, dt.month - n
+    while m < 1:
+        m += 12
+        y -= 1
+    return dt.replace(year=y, month=m, day=min(dt.day, calendar.monthrange(y, m)[1]))
+
+
+def archive_old_files():
+    """SAVE_DIR直下のARCHIVE_MONTHSか月より古いファイルを、更新月ごとにbackup/S_YYYYMM.zipへ移す。
+    zipへの書き込みと検証が済んだファイルだけ削除する（失敗時は元ファイルを残す）。"""
+    backup_dir = os.path.join(SAVE_DIR, BACKUP_SUBDIR)
+    cutoff = months_ago(datetime.now(), ARCHIVE_MONTHS).timestamp()
+
+    groups = {}
+    for name in os.listdir(SAVE_DIR):
+        path = os.path.join(SAVE_DIR, name)
+        if not os.path.isfile(path):
+            continue
+        mtime = os.path.getmtime(path)
+        if mtime < cutoff:
+            ym = datetime.fromtimestamp(mtime).strftime('%Y%m')
+            groups.setdefault(ym, []).append((name, path, mtime))
+
+    if not groups:
+        logger.info("退避対象の古いファイルはありません")
+        return True
+
+    os.makedirs(backup_dir, exist_ok=True)
+    ok = True
+    for ym, items in sorted(groups.items()):
+        zip_path = os.path.join(backup_dir, f"S_{ym}.zip")
+        try:
+            arcnames = {}
+            with zipfile.ZipFile(zip_path, 'a', zipfile.ZIP_DEFLATED) as zf:
+                existing = set(zf.namelist())
+                for name, path, mtime in items:
+                    arcname = name
+                    if arcname in existing:
+                        # 同名がzip内にある場合は更新日時を付けて区別する
+                        stem, ext = os.path.splitext(name)
+                        arcname = f"{stem}_{datetime.fromtimestamp(mtime).strftime('%Y%m%d%H%M%S')}{ext}"
+                    zf.write(path, arcname)
+                    existing.add(arcname)
+                    arcnames[path] = arcname
+            # 検証してから削除
+            with zipfile.ZipFile(zip_path) as zf:
+                bad = zf.testzip()
+                names = set(zf.namelist())
+            if bad is not None or any(a not in names for a in arcnames.values()):
+                raise RuntimeError(f"zip検証に失敗しました: {zip_path} ({bad})")
+            for name, path, mtime in items:
+                os.remove(path)
+            logger.info(f"📦 {len(items)}件を {os.path.basename(zip_path)} に退避しました")
+        except Exception as e:
+            ok = False
+            logger.error(f"❌ 古いファイルの退避に失敗しました ({ym}): {e}")
+            logger.error(traceback.format_exc())
+    return ok
+
+
+def archive_if_new_month():
+    """前回の退避と月が違えば（＝月が替わっていれば）archive_old_filesを実行する"""
+    if not SAVE_DIR or not os.path.exists(SAVE_DIR):
+        return
+    marker = os.path.join(SAVE_DIR, BACKUP_SUBDIR, ARCHIVE_MARKER)
+    this_month = datetime.now().strftime('%Y%m')
+    try:
+        last = open(marker, encoding='utf-8').read().strip() if os.path.exists(marker) else None
+    except Exception:
+        last = None
+    if last == this_month:
+        return
+    logger.info(f"月次の古いファイル退避を開始します（前回: {last or '未実行'} → 今回: {this_month}）")
+    try:
+        if archive_old_files():
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, 'w', encoding='utf-8') as f:
+                f.write(this_month)
+    except Exception as e:
+        logger.error(f"❌ 月次退避で予期せぬエラー: {e}")
+        logger.error(traceback.format_exc())
+
 
 def get_latest_s_file():
     """SAVE_DIRから最新のSで始まるファイルを取得する関数"""
@@ -183,7 +280,9 @@ def fetch_attachments():
 
         # --- 2. 未読メールの中から特定の送信元のメールを検索 ---
         # criteria = f'(UNSEEN FROM "{TARGET_SENDER}")' # 未読のみ
-        criteria = f'(FROM "{TARGET_SENDER}")' # 既読・未読問わず
+        since = datetime.now() - timedelta(days=FETCH_DAYS)
+        since_str = f"{since.day:02d}-{IMAP_MONTHS[since.month - 1]}-{since.year}"
+        criteria = f'(FROM "{TARGET_SENDER}" SINCE {since_str})' # 既読・未読問わず・直近FETCH_DAYS日
         status, messages = mail.search(None, criteria)
 
         if status != 'OK' or not messages[0]:
@@ -276,6 +375,7 @@ if __name__ == '__main__':
     logger.info("----------------------------------------")
 
     while True:
+        archive_if_new_month()
         logger.info("メールの確認を開始します。")
         fetch_attachments()
         logger.info("確認完了。次の確認まで待機します...")
