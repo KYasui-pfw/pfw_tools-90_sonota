@@ -48,6 +48,8 @@ dialog li { margin-bottom: 0.5rem; }
 .msg.warn { color: #e65100; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; }
 .toolbar button { margin: 0; width: auto; padding: 0.25rem 0.75rem; }
+/* 列名の「\n」で2段に改行する。2段が入る高さにそろえる */
+.ag-theme-quartz .ag-header-cell-text { white-space: pre-line; line-height: 1.25; }
 #grid { height: calc(100vh - 190px); min-height: 300px; width: 100%; }
 </style>
 </head>
@@ -87,7 +89,9 @@ dialog li { margin-bottom: 0.5rem; }
             </ol>
             <p><small>月次は「年・月・次」をつなげた数字（例: 2026年11月1次 → 2026111）で範囲を指定します。
                 空欄にした側は範囲指定なし（両方空欄なら全期間）です。<br>
-                注文書の「発行済／未発行」は、発注ヘッダ（D3330）の注文書発行区分（2＝発行済、1＝未発行）で表示しています。</small></p>
+                注文書の「発行済／未発行」は、発注ヘッダ（D3330）の注文書発行区分（2＝発行済、1＝未発行）で表示しています。<br>
+                「自動発注」は、業務ポータルの注文書自動発行登録にその品目CD＋工程が登録されていれば「有」（発注の行のみ。登録が無ければ空欄）。
+                「集約注文番号」は、業務ポータルの集約注文書発行のマッピングにその発注（発注番号＋行）があれば集約注文書番号（Dxxxxxxxx。無ければ空欄）です。</small></p>
         </article>
 </dialog>
 
@@ -136,6 +140,18 @@ const API_URL = "http://pfw-api/sql";
 const API_KEY = "oG5^Ls%#20yq";
 const HEADERS = { "X-API-KEY": API_KEY, "Content-Type": "application/json" };
 const MAX_ROWS = 100000;
+
+// 業務ポータル（Django）の汎用API。自動発注の登録・集約注文書のひも付きを読む（どちらも参照だけ）
+const PORTAL_SQL_URL = "http://pfw-gyomu/portal-api/sql";
+const PORTAL_HEADERS = { "X-API-KEY": "QwVXswjbjD4B", "Content-Type": "application/json" };
+// 注文書自動発行登録（品目CD＋工程CD。工程CDが空欄＝品目の発注）
+const PORTAL_AUTO_SQL = "SELECT hmcd, ktcd FROM auto_order_issue_autoissuetarget";
+// 集約注文書発行のマッピング（rBOM発注番号＋行 → 集約注文書番号 Dxxxxxxxx）
+const PORTAL_AGG_SQL = `
+SELECT m.pono, m.lineno, o.order_no
+FROM purchase_order_ordermapping m
+JOIN purchase_order_aggregatedorder o ON o.id = m.order_id
+`;
 
 // D3110 は (SEINO, LISTNO, VERNO) が一意。SEINO+LISTNO ごとに VERNO 最大の1行を「最新版」とする
 const SQL = `
@@ -226,32 +242,62 @@ const columnDefs = [
     { headerName: "部品表訂番", field: "BOM_VERNO", width: 130, type: "numericColumn" },
     { headerName: "部品表有効", field: "VALFLG", width: 130, valueFormatter: withText(VALFLG_TEXT) },
     { headerName: "部品表状態", field: "BOM_STATUS", width: 130 },
-    { headerName: "発注/引当番号", field: "PONO", width: 170 },
+    { headerName: "発注/\n引当番号", field: "PONO", width: 170 },
     { headerName: "行", field: "LINENO", width: 65, type: "numericColumn" },
-    { headerName: "品目コード", field: "HMCD", width: 150 },
+    { headerName: "自動\n発注", field: "AUTO_ISSUE", width: 90 },
+    { headerName: "集約注文\n番号", field: "AGG_NO", width: 120 },
+    { headerName: "品目\nCD", field: "HMCD", width: 150 },
     { headerName: "品名", field: "HMNM", width: 170 },
     { headerName: "工程", field: "KTCD", width: 95 },
-    { headerName: "部品表数量", field: "BOM_QTY", width: 130, type: "numericColumn", valueFormatter: fmtNum },
-    { headerName: "発注/引当数", field: "THQTY", width: 150, type: "numericColumn", valueFormatter: fmtNum },
-    { headerName: "受入/棚出済", field: "RCVQTY", width: 160, type: "numericColumn", valueFormatter: fmtNum },
-    { headerName: "発注/引当状態", field: "PO_STATUS", width: 170, valueFormatter: statusText },
+    { headerName: "部品表\n数量", field: "BOM_QTY", width: 90, type: "numericColumn", valueFormatter: fmtNum },
+    { headerName: "発注/\n引当数", field: "THQTY", width: 90, type: "numericColumn", valueFormatter: fmtNum },
+    { headerName: "受入/\n棚出済", field: "RCVQTY", width: 90, type: "numericColumn", valueFormatter: fmtNum },
+    { headerName: "発注/\n引当状態", field: "PO_STATUS", width: 120, valueFormatter: statusText },
     { headerName: "注文書", field: "PRNKBN", width: 95, valueFormatter: withText(PRNKBN_TEXT) },
     { headerName: "注文書発行日", field: "PRNDT", width: 145, valueFormatter: (p) => fmtDate(p.value) },
     { headerName: "金額", field: "AMOUNT", width: 100, type: "numericColumn", valueFormatter: fmtNum },
     { headerName: "発注/引当日", field: "PODT", width: 150, valueFormatter: (p) => fmtDate(p.value) },
     { headerName: "希望納期/棚出予定日", field: "DRVDT", width: 220, valueFormatter: (p) => fmtDate(p.value) },
-    { headerName: "仕入先CD", field: "SRCD", width: 120 },
+    { headerName: "仕入先\nCD", field: "SRCD", width: 110 },
     { headerName: "仕入先名", field: "SRNM", width: 180 },
-    { headerName: "担当者CD", field: "TANCD", width: 120 },
+    { headerName: "担当者\nCD", field: "TANCD", width: 110 },
     { headerName: "担当者", field: "TANNM", width: 110 },
 ];
 
 // 「全表示」のチェックが無いときに出す列（並びは columnDefs の順）
 const BASIC_FIELDS = [
-    "KUBUN", "GETSUJI", "SEINO", "PONO", "HMCD", "HMNM", "KTCD", "BOM_QTY", "THQTY", "RCVQTY",
+    "KUBUN", "GETSUJI", "SEINO", "PONO", "AUTO_ISSUE", "AGG_NO", "HMCD", "HMNM", "KTCD", "BOM_QTY", "THQTY", "RCVQTY",
     "PO_STATUS", "PRNKBN", "PRNDT", "SRCD", "TANCD",
 ];
 columnDefs.forEach((c) => { c.hide = !BASIC_FIELDS.includes(c.field); });
+
+// 業務ポータルから引いた結果を、発注の行にだけ付ける（引当の行は空欄）
+const trimStr = (v) => (v == null ? "" : String(v).trim());
+async function portalSql(sql) {
+    const res = await fetch(PORTAL_SQL_URL, {
+        method: "POST",
+        headers: PORTAL_HEADERS,
+        body: JSON.stringify({ sql, max_rows: MAX_ROWS }),
+    });
+    if (!res.ok) throw new Error(`業務ポータルAPIエラー: ${res.status}`);
+    return (await res.json()).rows;
+}
+async function fetchPortalLookups() {
+    const [autoRows, aggRows] = await Promise.all([portalSql(PORTAL_AUTO_SQL), portalSql(PORTAL_AGG_SQL)]);
+    return {
+        auto: new Set(autoRows.map((r) => `${trimStr(r.hmcd)}|${trimStr(r.ktcd)}`)),
+        agg: new Map(aggRows.map((r) => [`${trimStr(r.pono)}|${Number(r.lineno)}`, r.order_no])),
+    };
+}
+function attachPortalInfo(rows, lookups) {
+    rows.forEach((r) => {
+        r.AUTO_ISSUE = "";
+        r.AGG_NO = "";
+        if (r.KUBUN !== "発注" || !lookups) return;
+        if (lookups.auto.has(`${trimStr(r.HMCD)}|${trimStr(r.KTCD)}`)) r.AUTO_ISSUE = "有";
+        r.AGG_NO = lookups.agg.get(`${trimStr(r.PONO)}|${Number(r.LINENO)}`) || "";
+    });
+}
 
 let gridApi = null;
 
@@ -282,7 +328,7 @@ function app() {
                 localeText: AG_GRID_LOCALE_JA,
                 enableCellTextSelection: true,
                 rowHeight: 28,
-                headerHeight: 32,
+                headerHeight: 46,
                 onFilterChanged: () => this.updateSummary(),
             });
             // 件数が少ないので、開いたときに全期間で検索して表示しておく
@@ -317,6 +363,11 @@ function app() {
             gridApi.setGridOption("rowData", []);
             gridApi.showLoadingOverlay();
             try {
+                // 業務ポータルの参照は rBOM の検索と同時に走らせる。失敗しても一覧は出す（2列が空欄になるだけ）
+                const portalPromise = fetchPortalLookups().catch((e) => {
+                    this.warning = `自動発注・集約注文番号を取得できませんでした（${e.message}）。この2列は空欄です。`;
+                    return null;
+                });
                 const res = await fetch(API_URL, {
                     method: "POST",
                     headers: HEADERS,
@@ -332,9 +383,10 @@ function app() {
                     throw new Error(`APIエラー: ${res.status} ${detail || ""}`);
                 }
                 const data = await res.json();
+                attachPortalInfo(data.rows, await portalPromise);
                 gridApi.setGridOption("rowData", data.rows);
                 if (data.truncated) {
-                    this.warning = `件数が上限（${MAX_ROWS.toLocaleString()}件）を超えたため、一部のみ表示しています。月次の範囲を狭めてください。`;
+                    this.warning = `件数が上限（${MAX_ROWS.toLocaleString()}件）を超えたため、一部のみ表示しています。月次の範囲を狭めてください。` + (this.warning ? " " + this.warning : "");
                 }
                 this.lastRange = (from == null && to == null)
                     ? "全期間"
@@ -366,6 +418,7 @@ function app() {
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
             gridApi.exportDataAsCsv({
                 fileName: `製番手配_不要発注引当チェック_${stamp}.csv`,
+                processHeaderCallback: (p) => (p.column.getColDef().headerName || "").replace(/\n/g, ""),
                 processCellCallback: (p) => {
                     // 数値はカンマ区切りにせずそのまま出す（Excelで計算できるように）
                     const def = p.column.getColDef();
