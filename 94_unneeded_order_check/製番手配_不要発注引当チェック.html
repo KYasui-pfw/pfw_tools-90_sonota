@@ -68,8 +68,8 @@ dialog li { margin-bottom: 0.5rem; }
             <p>製番手配のうち、部品表の上では「もう要らない」部品なのに、発注や引当が残っているものを探します。</p>
             <ol>
                 <li><b>製番を選ぶ</b><br>
-                    指定した月次（開始～終了）の製番のうち、<b>まだ完了していない製番</b>だけを対象にします。<br>
-                    <small>製番完了（D3030）にデータがある製番は、完了済みとして除きます。<br>
+                    指定した月次（開始～終了）の製番を対象にします。<br>
+                    <small>製番完了（D3030）にデータがある製番は製番完成済です。<b>「製番完成済を除く」にチェックがあるとき（初期値）は</b>、完成済の製番を除きます。<br>
                     在庫発注（ZAIKOSEIBAN）と経費・工具発注（KEIHI）は製番発注ではないため、対象外です。</small></li>
                 <li><b>部品表の最新版を見る</b><br>
                     対象製番の部品表（D3110）は、改版するたびに同じリスト番号の行が増えていきます。
@@ -121,6 +121,7 @@ dialog li { margin-bottom: 0.5rem; }
         </div>
         <div class="actions">
             <button @click="search()" :aria-busy="loading" :disabled="loading">検索</button>
+            <label class="show-all"><input type="checkbox" x-model="excludeDone">製番完成済を除く</label>
             <label class="show-all"><input type="checkbox" x-model="showAll" @change="applyColumns()">全項目表示</label>
         </div>
     </div>
@@ -162,7 +163,8 @@ WITH S AS (
     AND (:getsuji_to IS NULL OR s.GETSUJI <= :getsuji_to)
     -- 在庫発注・経費工具発注は製番発注ではないので対象外（D3110 に QTY=0 の行が1つだけあり、全発注が拾われてしまう）
     AND s.SEINO NOT IN ('ZAIKOSEIBAN', 'KEIHI')
-    AND NOT EXISTS (SELECT 1 FROM D3030 c WHERE c.SEINO = s.SEINO)
+    -- D3030 に存在する製番＝製番完成済。:excl_done=1 のときだけ除く
+    AND (:excl_done = 0 OR NOT EXISTS (SELECT 1 FROM D3030 c WHERE c.SEINO = s.SEINO))
 ),
 B AS (
   SELECT b.SEINO, b.LISTNO, b.VERNO, b.VALFLG, b.STATUS, b.QTY,
@@ -313,6 +315,7 @@ function app() {
         lastRange: "",
         rowCount: 0,
         showAll: false,
+        excludeDone: true,   // 製番完成済（D3030に存在する製番）を除く。初期値は除く
 
         // 全表示 ON → 全列 / OFF → BASIC_FIELDS の列だけ（CSV出力も表示中の列だけになる）
         applyColumns() {
@@ -373,7 +376,7 @@ function app() {
                     headers: HEADERS,
                     body: JSON.stringify({
                         sql: SQL,
-                        params: { getsuji_from: from, getsuji_to: to },
+                        params: { getsuji_from: from, getsuji_to: to, excl_done: this.excludeDone ? 1 : 0 },
                         max_rows: MAX_ROWS,
                     }),
                 });
