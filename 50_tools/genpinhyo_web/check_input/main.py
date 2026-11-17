@@ -546,10 +546,11 @@ def _month_list():
 # ── Login page ─────────────────────────────────────────────────────────────
 
 def _add_common_head():
-    ui.add_head_html('<link rel="stylesheet" href="/_nicegui/3.13.0/static/fonts.css">')
     ui.add_head_html(
         '<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP&display=swap" rel="stylesheet">')
-    ui.add_css('* { font-family: "Noto Sans JP", sans-serif; }')
+    # アイコン（.q-icon）とその中身には当てない。NiceGUI 4 からアイコンの文字が中の <span> に入るので、
+    # そこまで Noto Sans JP にするとアイコンが「visibility_off」などの文字で出る
+    ui.add_css('*:not(.q-icon):not(.q-icon *) { font-family: "Noto Sans JP", sans-serif; }')
 
 @ui.page('/login')
 def login_page():

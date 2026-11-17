@@ -269,13 +269,16 @@ def filter_rows(df, ji):
 def show_grid(df):
     """一覧（AG Grid）を出し、チェックされた行を返す（列名は DB の名前に戻してある）。"""
     st.session_state.setdefault("select_all", False)
-    col_select, _, col_help = st.columns([1, 4, 1.5])
+    col_select, info, col_help = st.columns([1, 4, 1.5])
     with col_select:
         if st.session_state["select_all"]:
             if st.button("全解除"):
                 st.session_state["select_all"] = False
         elif st.button("全選択"):
             st.session_state["select_all"] = True
+    with info:
+        st.markdown('重要：2026/11/17　現品票のレイアウトが変更になりました（図番表示）', unsafe_allow_html=True)
+
     with col_help:
         if st.button("❓ 現品票が出ない場合"):
             help_dialog()

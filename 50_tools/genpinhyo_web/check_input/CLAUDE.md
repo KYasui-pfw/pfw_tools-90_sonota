@@ -122,12 +122,14 @@ zuban_select.update()
 
 ## Deployment Note
 
-**NiceGUI version mismatch → icons disappear.** Material Icons are served from NiceGUI's own static files. If the production venv has a different NiceGUI version than dev, icon fonts may not load (`fonts.css 404`). Fix: pin the same version in both environments.
+**アイコンが `visibility_off` / `search` などの文字で出る → 全体のフォント指定がアイコンに当たっている。**
+NiceGUI 4 から Quasar のアイコンは `<i class="q-icon material-icons"><span>visibility_off</span></i>` と中に `<span>` を持つ。
+`* { font-family: "Noto Sans JP" }` のように全要素へ当てると、その `<span>` まで上書きされてリガチャが効かず文字になる
+（アイコンフォント自体は読めている＝fonts.css の 404 や venv の版ずれではない。2026-11-17 に venv を作り直しても直らなかった）。
+`_add_common_head()` では `*:not(.q-icon):not(.q-icon *)` とアイコンを外している。全体のフォント指定を足すときは同じようにアイコンを外すこと。
 
-```bat
-venv\Scripts\pip show nicegui          :: check version
-venv\Scripts\pip install nicegui==X.Y.Z  :: pin to match dev
-```
+- `Check_input_start.bat` は `pip install nicegui` を版指定なしで実行する（venv を作り直すと最新版が入る。2026-11-17 時点 4.0.0）
+- `/_nicegui/<版>/static/...` のように NiceGUI の版をパスに直書きしない（版が変わると 404）
 
 ## DB Write Functions
 
