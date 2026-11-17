@@ -396,7 +396,15 @@ def load_kouteizukan_filtered(buban='', match='前方一致'):
     try:
         api_match = 'prefix' if match == '前方一致' else 'contains'
         rows, _truncated = portal_api.search_drawings(buban, api_match)
-        return [{label: (r.get(key) or '') for key, label in KOUTEIZU_FIELDS.items()} for r in rows]
+        result = []
+        for r in rows:
+            row = {label: (r.get(key) or '') for key, label in KOUTEIZU_FIELDS.items()}
+            # 図面PDF（fsrv24/zumen の最新Ver）の URL。API の <key>_url をそのまま使う
+            for key, label in KOUTEIZU_FIELDS.items():
+                if key != 'item':
+                    row[f'{label}_url'] = r.get(f'{key}_url') or ''
+            result.append(row)
+        return result
     except Exception as e:
         print(f'load_kouteizukan_filtered: {e}')
         return []
@@ -763,7 +771,9 @@ def main_page():
             tab1_table.on('tab1_cell', handle_tab1_cell)
 
             ui.separator().classes('my-3')
-            ui.markdown('###### ※参考　工程図番情報')
+            with ui.row(align_items='baseline').classes('gap-4'):
+                ui.markdown('###### ※参考　工程図番情報')
+                ui.label('※表示されるのは最新Verの図面のみです').classes('text-sm text-red-600')
 
             TAB1_REF_COLS = [
                 {'name': '完成部番', 'label': '完成部番', 'field': '完成部番'},
@@ -783,6 +793,16 @@ def main_page():
             ]
             tab1_ref_table = ui.table(columns=TAB1_REF_COLS, rows=[], row_key='完成部番') \
                 .classes('w-full').props('dense flat bordered')
+            # 図番は図面PDF（fsrv24/zumen）へのリンクにする（URL が無い図番は文字だけ）
+            for col in TAB1_REF_COLS[1:]:
+                field = col['field']
+                tab1_ref_table.add_slot(f'body-cell-{field}', f'''
+                    <q-td :props="props">
+                        <a v-if="props.row['{field}_url']" :href="props.row['{field}_url']"
+                           target="_blank" rel="noopener" class="text-primary underline">{{{{ props.value }}}}</a>
+                        <span v-else>{{{{ props.value }}}}</span>
+                    </q-td>
+                ''')
 
             # ── Functions defined after all UI ──
             async def search_tab1():
