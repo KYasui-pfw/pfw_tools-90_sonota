@@ -114,6 +114,61 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(excluded, set())
 
 
+class SplitDuplicateTests(unittest.TestCase):
+    """工程が2枚の伝票に分かれた重複（業務ポータル A4 の listno_keys。2026-11-24 追加）。"""
+
+    def test_h_wins_over_a(self):
+        hidden = update.find_split_duplicates([
+            slip(denpyo_no="A000009865", listno_keys=["26DKM043-240-40-10"]),
+            slip(denpyo_no="H000041787", listno_keys=["26DKM043-240-40-10"]),
+        ])
+        self.assertEqual(hidden, {"A000009865"})
+
+    def test_smaller_h_wins(self):
+        hidden = update.find_split_duplicates([
+            slip(denpyo_no="H000041772", listno_keys=["26DKM023-260-20"]),
+            slip(denpyo_no="H000040879", listno_keys=["26DKM023-260-20"]),
+        ])
+        self.assertEqual(hidden, {"H000041772"})
+
+    def test_different_key_or_hmcd_is_not_duplicate(self):
+        hidden = update.find_split_duplicates([
+            slip(denpyo_no="H1", listno_keys=["26DKM043-240-40-10"]),
+            slip(denpyo_no="H2", listno_keys=["26DKM044-240-40-10"]),
+            slip(denpyo_no="H3", listno_keys=["26DKM043-240-40-10"], hmcd="OTHER"),
+        ])
+        self.assertEqual(hidden, set())
+
+    def test_pt_loses_to_40(self):
+        """払出先が違っても重複。PT と 40 なら、番号が大きくても 40 を残す（利用者の指示 2026-11-24）。"""
+        hidden = update.find_split_duplicates([
+            slip(denpyo_no="H000037227", srcd="PT", listno_keys=["26DKL001-580-150-10"]),
+            slip(denpyo_no="H000037236", srcd="40", listno_keys=["26DKL001-580-150-10"]),
+        ])
+        self.assertEqual(hidden, {"H000037227"})
+
+    def test_different_srcd_other_than_pt_uses_number(self):
+        """PT 以外で払出先が違うとき（40 と CC）は、ふつうどおり番号の小さいほうを残す。"""
+        hidden = update.find_split_duplicates([
+            slip(denpyo_no="H000044799", srcd="CC", listno_keys=["X-1"]),
+            slip(denpyo_no="H000044798", srcd="40", listno_keys=["X-1"]),
+        ])
+        self.assertEqual(hidden, {"H000044799"})
+
+    def test_lot_spanning_other_groups_is_kept(self):
+        """複数の組にまたがる伝票は、一部の組で負けても隠さない。"""
+        hidden = update.find_split_duplicates([
+            slip(denpyo_no="A000008944", listno_keys=["26DKL005-140", "26DKL006-140"]),
+            slip(denpyo_no="H000000001", listno_keys=["26DKL005-140"]),
+        ])
+        self.assertEqual(hidden, set())
+
+    def test_old_api_without_keys_does_nothing(self):
+        """A4 が listno_keys を返さない（古い業務ポータル）ときは何もしない。"""
+        self.assertEqual(update.find_split_duplicates([slip(denpyo_no="H1"), slip(denpyo_no="A1")]),
+                         set())
+
+
 class BuildRecordsTests(unittest.TestCase):
     def test_record_values(self):
         drawings = {"740-409CA30": {"B1": "740-409CA$$-B1", "F1": "", "L": "740-409CA30-L",
@@ -163,6 +218,17 @@ class RunUpdateTests(TempDbTestCase):
         # 部品名は残した伝票のものだけ、QRコードレイアウト区分 2（新しい部品名の目印）で足す
         self.assertEqual(self.query("SELECT * FROM buhin_irepo_mst"), [("CAM HOLDER", 0, 2, 0)])
         self.assertEqual(self.query("SELECT * FROM delete_mst"), [("H000000001", 0)])
+
+    def test_split_duplicate_is_written_but_hidden(self):
+        """重複の片方は genpinhyo に書く（削除フラグを立てない）が、excluded_lots に入れて一覧に出さない。"""
+        result = self.run_update([
+            slip(denpyo_no="A000009865", listno_keys=["26DKM043-240-40-10"]),
+            slip(denpyo_no="H000041787", listno_keys=["26DKM043-240-40-10"]),
+        ])
+        self.assertEqual((result.written, result.split_duplicates), (2, 1))
+        self.assertEqual(self.query("SELECT ロット番号 FROM excluded_lots"), [("A000009865",)])
+        self.assertEqual(self.query("SELECT ロット番号, 削除flg FROM delete_mst ORDER BY ロット番号"),
+                         [("A000009865", 0), ("H000041787", 0)])
 
     def test_existing_part_settings_are_kept(self):
         conn = sqlite3.connect(config.GENPINHYO_DB)

@@ -48,8 +48,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     ↓ ＋ 客先名・国名（i-Reporter 客先マスタ）＋ 図番（業務ポータル drawings）
 genpinhyo（REPLACE）・buhin_irepo_mst（新しい部品名を QRコードレイアウト区分=2 で）
     ↓ 削除フラグ: 当月〜3か月先で、加工伝票に無いロット＝1（変化は flag_change_log）
-    ↓ excluded_lots: 払出先で全行が除外になったロット（毎回作り直す）
+    ↓ excluded_lots: 払出先で全行が除外になったロット＋工程が2枚の伝票に分かれた重複の片方（毎回作り直す）
 ```
+- 工程が2枚の伝票に分かれた重複（2026-11-24 追加・`update.find_split_duplicates`）: A4 の `listno_keys`（D3420.LISTNO の最後のハイフンより前）＋品目CD が同じ伝票は1件だけ出す。払出先は見ない。残す順は ① 払出先 PT でない ② H始まり ③ 番号の小さいほう。genpinhyo には書き、excluded_lots で隠すだけ（削除フラグを立てないため）。⚠ ②③は業務ポータルの作業計画の取り込み（`apps/machining_schedule/services.py` の `drop_split_duplicate_lots`）と同じ決まり。①は現品票だけ
 - 払出先の除外（時限処理）: 特定5部品（SINKER REST RING / NEEDLE DIAL / NEEDLE CYLINDER / SINKER DIAL / WRAP DIAL）は 40 を捨てて 60 を残す。それ以外は 49・60 を捨てる。PT は捨てない
 - 外から取るもの（API・i-Reporter）は DB を開く前にそろえ、書き込みは1トランザクション。**失敗したら何も書かない**
 - ⚠ 書く前に `PRAGMA quick_check` で点検し、壊れていれば止める（`db.check_integrity`）。ロット番号の索引が壊れていると
@@ -69,7 +70,7 @@ genpinhyo（REPLACE）・buhin_irepo_mst（新しい部品名を QRコードレ�
 | genpinhyo | 現品票の本体（1ロット1行・全列 TEXT）。⚠ i-Reporter `header_koushin.py` が**列名で**読む（`ﾒｯｷ='1.0'` で判定）。列名を変えない |
 | buhin_irepo_mst | 部品名ごとの設定（ireporter管理flg / QRコードレイアウト区分 0=i-Reporter・1=旧形式・2=新部品 / 縦横区分 1=縦405・0=横406）。check_input のタブ4で人が直す |
 | delete_mst / flag_change_log | 削除フラグとその変化の記録 |
-| excluded_lots | 払出先で全行が除外になったロット（ロット番号だけ） |
+| excluded_lots | 払出先で全行が除外になったロット・工程が2枚の伝票に分かれた重複の片方（ロット番号だけ） |
 | cgb_seino_ch_mapping | CHANGE GEAR BOX の製番 → CH番号 |
 | print_history | 印刷の記録（1ロット1行。種類・帳票発行ID） |
 | error_log | エラー（書けないときは `err.txt` に追記） |

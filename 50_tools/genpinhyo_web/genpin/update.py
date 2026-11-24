@@ -12,7 +12,7 @@
     4. 客先名・国名（i-Reporter の客先マスタ）と図番（業務ポータル）を付ける
     5. genpinhyo に書く。新しい部品名を buhin_irepo_mst に足す
     6. 削除フラグを付け直す（当月〜3か月先で、加工伝票から消えたロット＝1）
-    7. 払出先で全行が除外になったロットを excluded_lots に入れ直す
+    7. 払出先で全行が除外になったロットと、工程が2枚の伝票に分かれた重複の片方を excluded_lots に入れ直す
    5〜7 は1つのトランザクション（途中で失敗したら何も書かない）。
 """
 
@@ -60,6 +60,7 @@ class UpdateResult:
     """データ更新の結果（画面に件数を出すため）。"""
     written: int = 0          # genpinhyo に書いたロット数
     excluded: int = 0         # 払出先で全行が除外になったロット数
+    split_duplicates: int = 0  # 工程が2枚の伝票に分かれた重複で隠したロット数
     change_gear_boxes: int = 0
     deleted_on: int = 0       # 削除フラグが 0 → 1 になったロット数
     deleted_off: int = 0      # 削除フラグが 1 → 0 になったロット数
@@ -155,6 +156,75 @@ def filter_slips(slips):
 
     fully_excluded = {lot_no for lot_no, flag in excluded_flags.items() if flag}
     return kept, fully_excluded
+
+
+# ---------------------------------------------------------------------------
+# 2-2. 工程が2枚の伝票に分かれた重複（2026-11-24 追加）
+# ---------------------------------------------------------------------------
+# rBOM では条件によって、1つの品目の工程が2枚の作業指示（ロット）に分かれて出る
+# （例: H000041787＝L2・TH9G ／ A000009865＝SL。製番 26DKM043・品目 161-406UA34）。
+# 現品票が2枚出てしまうので、片方を一覧に出さない（excluded_lots に入れる）。
+#
+# 見分け方（利用者の指示）: D3420.LISTNO の最後のハイフンより前（例 26DKM043-240-40-10）が同じ。
+#   業務ポータル A4 が伝票ごとに `listno_keys` で返す。念のため品目CDも同じであることを条件にする。
+#   ⚠ **払出先は見ない**（払出先が違っても重複なら1件だけ出す。利用者の確認 2026-11-24）。
+# 残す順: ① 払出先 PT でない伝票が先 ② H始まりが先 ③ 番号の小さいほうが先。
+#   ⚠ ① は現品票だけの決まり（利用者の指示 2026-11-24「40を残してください」）。現品票は払出先 PT の
+#     伝票も出すが、作業計画（業務ポータル）は PT を捨てているので、作業計画と同じ伝票（40）を残す。
+#     例: H000037227（PT）と H000037236（40）→ H000037236 を残す。
+#
+# ⚠ ②③と「全部の組で負けたら隠す」は、業務ポータルの作業計画の取り込み
+#   （apps/machining_schedule/services.py の drop_split_duplicate_lots）と同じ決まり。
+#   **どちらかを変えるときはもう片方も直す。**
+# ⚠ genpinhyo には書く（書かないと「加工伝票から消えた」として削除フラグが立つ）。隠すだけ。
+# ⚠ A4 が listno_keys を返さない（古い業務ポータル）ときは何もしない。
+
+# 払出先 PT（重複したときは、PT でない伝票を残す）。
+PT_SRCD = "PT"
+
+
+def lot_priority(lot_no, is_pt=False):
+    """重複したロットのうち、どれを残すかの並び順（小さいほうを残す）。
+
+    ① 払出先 PT でない伝票が先 ② H 始まりが先（A・F はあと）
+    ③ 同じなら番号の小さいほうが先（桁数がそろっている前提で文字のまま比べる）
+    """
+    is_not_h = 0 if lot_no.upper().startswith("H") else 1
+    return (1 if is_pt else 0, is_not_h, lot_no)
+
+
+def find_split_duplicates(slips):
+    """工程が2枚の伝票に分かれた重複のうち、一覧に出さないロット番号の集合を返す。
+
+    slips: 払出先などで外したあとの伝票（filter_slips の kept）。
+
+    ⚠ 1枚の伝票が複数の組（LISTNO の先頭部分）にまたがることがある（A000008944 は25製番分の
+      まとめ伝票）。ある組で負けても、ほかの組では勝っていれば、その製番の加工はその伝票にしか
+      無いので隠さない。**すべての組で負けた伝票だけ**を返す。
+    """
+    lots_by_group = {}    # (LISTNO の先頭部分, 品目CD) → ロット番号の集合
+    groups_by_lot = {}    # ロット番号 → 組の集合
+    pt_flags = {}         # ロット番号 → 残した行がすべて払出先 PT か
+    for slip in slips:
+        lot_no = slip["denpyo_no"]
+        hmcd = slip.get("hmcd") or ""
+        is_pt = (slip.get("srcd") or "") == PT_SRCD
+        pt_flags[lot_no] = pt_flags.get(lot_no, True) and is_pt
+        for key in slip.get("listno_keys") or []:
+            group = (key, hmcd)
+            lots_by_group.setdefault(group, set()).add(lot_no)
+            groups_by_lot.setdefault(lot_no, set()).add(group)
+
+    def priority(lot_no):
+        return lot_priority(lot_no, pt_flags.get(lot_no, False))
+
+    winner_by_group = {group: min(lots, key=priority) for group, lots in lots_by_group.items()}
+
+    hidden = set()
+    for lot_no, groups in groups_by_lot.items():
+        if all(winner_by_group[group] != lot_no for group in groups):
+            hidden.add(lot_no)
+    return hidden
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +416,7 @@ def run_update():
     # 外から取ってくるものは、DB を開く前に全部そろえる（途中で失敗したら書かずに終わる）。
     slips = portal_api.fetch_denpyo()
     kept, fully_excluded = filter_slips(slips)
+    split_duplicates = find_split_duplicates(kept)
     customers = {
         str(row["客先コード"]): (row["客先名"] or "", row["国名"] or "")
         for row in irepo.fetch_customers().to_dict("records")
@@ -395,7 +466,7 @@ def run_update():
         conn.execute("DELETE FROM excluded_lots")
         conn.executemany(
             "INSERT OR IGNORE INTO excluded_lots (ロット番号) VALUES (?)",
-            [(lot_no,) for lot_no in sorted(fully_excluded)],
+            [(lot_no,) for lot_no in sorted(fully_excluded | split_duplicates)],
         )
         conn.commit()
     except Exception:
@@ -407,6 +478,7 @@ def run_update():
     return UpdateResult(
         written=len(records),
         excluded=len(fully_excluded),
+        split_duplicates=len(split_duplicates),
         change_gear_boxes=len(change_gear_boxes),
         deleted_on=turned_on,
         deleted_off=turned_off,

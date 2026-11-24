@@ -16,7 +16,7 @@ def to_version(values):
 def read_genpinhyo(month_prefix):
     """genpinhyo から、月次が month_prefix（'YYYYMM'）で始まるロットを読む。
 
-    ⚠ excluded_lots（払出先で全行が除外になったロット）は読まない。
+    ⚠ excluded_lots（払出先で全行が除外になったロット・工程が2枚に分かれた重複の片方）は読まない。
     """
     conn = db.connect()
     try:
